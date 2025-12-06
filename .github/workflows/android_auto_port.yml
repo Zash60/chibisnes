@@ -349,7 +349,8 @@ jobs:
       - name: Build APK
         working-directory: ./android
         run: |
-          gradle wrapper
+          # CORREÇÃO: Forçar Gradle 8.2 para compatibilidade com AGP 8.2.0 e evitar erro HasConvention
+          gradle wrapper --gradle-version 8.2
           ./gradlew assembleDebug
 
       # 6. COMMIT E UPLOAD
