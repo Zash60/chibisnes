@@ -1,253 +1,72 @@
-name: Android Fix Crash & Build
+name: Build Android APK (Clean)
 
 on:
   workflow_dispatch:
   push:
     branches: [ "main", "master" ]
 
-permissions:
-  contents: write
-
 jobs:
-  fix-and-build:
+  build-only:
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------------
-      # 1. CORREÇÃO DOS ARQUIVOS (FIX DO LOG DE ERRO)
-      # ---------------------------------------------------------
-      
-      - name: Apply Go Fixes (Prevent Panic/Crash)
-        run: |
-          mkdir -p mobile
-          cat << 'EOF' > mobile/lib.go
-          package mobile
-
-          import (
-            "github.com/kaishuu0123/chibisnes/chibisnes"
-          )
-
-          var console *chibisnes.Console
-
-          func Start(romData []byte) string {
-            if len(romData) == 0 { return "ROM vazia" }
-            
-            // Reinicia console se ja existir
-            if console != nil {
-               console.Close()
-               console = nil
-            }
-
-            newConsole := chibisnes.NewConsole()
-            if err := newConsole.LoadROM("game.sfc", romData, len(romData)); err != nil {
-               return err.Error()
-            }
-            
-            // Atribui apenas se carregou com sucesso
-            console = newConsole
-            return ""
-          }
-
-          func RunFrame() []byte {
-            // CORREÇÃO: Evita crash se console for nil
-            if console == nil { return nil }
-            
-            console.RunFrame()
-            
-            width, height := 512, 478
-            buf := make([]byte, width*height*4) 
-            console.SetPixels(buf)
-            return buf
-          }
-
-          func GetAudioSamples() []byte {
-            // CORREÇÃO: Evita crash se console for nil
-            if console == nil { return nil }
-            
-            pcm := make([]int16, 735*2)
-            console.SetAudioSamples(pcm, 735)
-            
-            out := make([]byte, len(pcm)*2)
-            for i, v := range pcm {
-              out[i*2] = byte(v)
-              out[i*2+1] = byte(v >> 8)
-            }
-            return out
-          }
-
-          // CORREÇÃO: int32 para compatibilidade e check de nil
-          func SetInput(btnID int32, pressed bool) {
-            if console != nil {
-              console.SetButtonState(1, int(btnID), pressed)
-            }
-          }
-          EOF
-
-      - name: Apply Kotlin Fixes (Safe Loop)
-        run: |
-          mkdir -p android/app/src/main/java/com/kaishuu0123/chibisnes
-          cat << 'EOF' > android/app/src/main/java/com/kaishuu0123/chibisnes/EmulatorActivity.kt
-          package com.kaishuu0123.chibisnes
-          import android.graphics.*
-          import android.media.*
-          import android.os.Bundle
-          import android.view.*
-          import android.widget.Button
-          import androidx.appcompat.app.AppCompatActivity
-          import mobile.Mobile
-          import java.nio.ByteBuffer
-
-          class EmulatorActivity : AppCompatActivity() {
-              private lateinit var surfaceView: SurfaceView
-              private var running = false
-              private var audioTrack: AudioTrack? = null
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  setContentView(R.layout.activity_emulator)
-                  surfaceView = findViewById(R.id.surface)
-                  setupBtns()
-
-                  val uri = intent.data ?: return
-                  val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                  if (bytes != null) {
-                      val err = Mobile.start(bytes)
-                      if (err.isEmpty()) startLoop()
-                  }
-              }
-
-              private fun setupBtns() {
-                  bind(R.id.btnUp, 4); bind(R.id.btnDown, 5); bind(R.id.btnLeft, 6); bind(R.id.btnRight, 7)
-                  bind(R.id.btnA, 8); bind(R.id.btnB, 0); bind(R.id.btnX, 9); bind(R.id.btnY, 1)
-                  bind(R.id.btnStart, 3); bind(R.id.btnSelect, 2); bind(R.id.btnL, 10); bind(R.id.btnR, 11)
-              }
-              private fun bind(id: Int, emuId: Int) {
-                  findViewById<View>(id).setOnTouchListener { _, e ->
-                      // Check rapido para nao mandar input se nao estiver rodando
-                      if (running) {
-                          when(e.action) {
-                              MotionEvent.ACTION_DOWN -> Mobile.setInput(emuId, true)
-                              MotionEvent.ACTION_UP -> Mobile.setInput(emuId, false)
-                          }
-                      }
-                      true
-                  }
-              }
-
-              private fun startLoop() {
-                  running = true
-                  val min = AudioTrack.getMinBufferSize(44100, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
-                  audioTrack = AudioTrack.Builder()
-                      .setAudioFormat(AudioFormat.Builder().setSampleRate(44100).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                      .setBufferSizeInBytes(min)
-                      .setTransferMode(AudioTrack.MODE_STREAM)
-                      .build()
-                  audioTrack?.play()
-
-                  Thread {
-                      val bmp = Bitmap.createBitmap(512, 478, Bitmap.Config.ARGB_8888)
-                      val rect = Rect()
-                      while (running) {
-                          val start = System.currentTimeMillis()
-                          
-                          // Chamadas seguras ao Go
-                          val pixels = Mobile.runFrame()
-                          val audio = Mobile.getAudioSamples()
-
-                          if (audio != null) audioTrack?.write(audio, 0, audio.size)
-                          
-                          // So desenha se pixels nao for nulo
-                          if (pixels != null) {
-                              val holder = surfaceView.holder
-                              if (holder.surface.isValid) {
-                                  val c = holder.lockCanvas()
-                                  if (c != null) {
-                                      bmp.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
-                                      rect.set(0, 0, c.width, c.height)
-                                      c.drawColor(Color.BLACK)
-                                      c.drawBitmap(bmp, null, rect, null)
-                                      holder.unlockCanvasAndPost(c)
-                                  }
-                              }
-                          }
-                          val diff = System.currentTimeMillis() - start
-                          if (diff < 16) Thread.sleep(16 - diff)
-                      }
-                  }.start()
-              }
-              override fun onDestroy() {
-                  super.onDestroy()
-                  running = false
-                  audioTrack?.release()
-              }
-          }
-          EOF
-
-      # ---------------------------------------------------------
-      # 2. CONFIGURAÇÃO DE AMBIENTE
-      # ---------------------------------------------------------
+      # --- CONFIGURAÇÃO DE AMBIENTE ---
       - name: Setup JDK 17
         uses: actions/setup-java@v4
-        with: { java-version: '17', distribution: 'temurin' }
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
       - name: Setup Go
         uses: actions/setup-go@v4
-        with: { go-version: 'stable' }
+        with:
+          go-version: 'stable'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # ---------------------------------------------------------
-      # 3. BUILD DAS LIBS (GOMOBILE)
-      # ---------------------------------------------------------
-      - name: Build Go Library (Android API 21)
+      # --- GOMOBILE ---
+      - name: Build Go Library (.aar)
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
           go get golang.org/x/mobile/bind
+          
+          # Garante que a pasta libs existe
           mkdir -p android/app/libs
-          # Compila a lib Go corrigida
+          
+          # Compila a lib
           gomobile bind -target=android -androidapi 21 -o android/app/libs/chibisnes.aar ./mobile
 
-      # ---------------------------------------------------------
-      # 4. CONFIGURAÇÃO DO GRADLE (WRAPPER SEGURO)
-      # ---------------------------------------------------------
-      - name: Force Gradle Wrapper 8.2
+      # --- GRADLE BUILD ---
+      - name: Prepare Gradle Environment
         working-directory: ./android
         run: |
+          # Cria propriedade necessária para AndroidX
           echo "android.useAndroidX=true" > gradle.properties
-          mkdir temp_wrapper_gen
-          cd temp_wrapper_gen
+          
+          # Solução para o erro do Gradle 9:
+          # Gera o wrapper 8.2 em pasta temporária e move para o projeto
+          # Isso garante o build sem modificar seus arquivos no git
+          mkdir temp_wrapper
+          cd temp_wrapper
           touch settings.gradle
           gradle wrapper --gradle-version 8.2 --distribution-type bin
           cp -r gradle ../
           cp gradlew ../
           cp gradlew.bat ../
           cd ..
-          rm -rf temp_wrapper_gen
+          rm -rf temp_wrapper
           chmod +x gradlew
 
-      # ---------------------------------------------------------
-      # 5. BUILD DO APK
-      # ---------------------------------------------------------
-      - name: Build APK
+      - name: Build APK (Release & Debug)
         working-directory: ./android
         run: ./gradlew assembleDebug
 
-      # ---------------------------------------------------------
-      # 6. COMMIT E UPLOAD
-      # ---------------------------------------------------------
-      - name: Commit Changes (Save Fixes)
-        run: |
-          git config --global user.name "AutoPort"
-          git config --global user.email "autoport@bot"
-          git add .
-          git commit -m "Fix Panic/Crash in Go and Kotlin" || echo "Nada novo"
-          git push
-
+      # --- UPLOAD ---
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
