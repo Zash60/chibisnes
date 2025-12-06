@@ -135,6 +135,16 @@ jobs:
                     abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
                   }
               }
+
+              // CORREÇÃO: Alinhar versões do Java e Kotlin para 1.8
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              kotlinOptions {
+                  jvmTarget = '1.8'
+              }
+
               sourceSets {
                   main { jniLibs.srcDirs = ['src/main/jniLibs'] }
               }
