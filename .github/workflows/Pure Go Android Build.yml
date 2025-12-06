@@ -1,4 +1,4 @@
-name: Pure Go Android Clean Build
+name: Pure Go Android Build (Clean & NDK Fix)
 
 on:
   workflow_dispatch:
@@ -16,19 +16,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1. LIMPEZA TOTAL (Removemos go.mod antigo para evitar conflito)
-      # Mantemos a pasta 'chibisnes' que tem o emulador
+      # 1. LIMPEZA TOTAL (Removemos go.mod e pastas antigas)
       - name: Clean Environment
         run: |
           rm -rf android mobile cmd internal build .github/workflows/release.yml go.mod go.sum || true
           mkdir -p cmd/mobile/assets
 
-      # 2. RECRIAR go.mod LIMPO
+      # 2. CONFIGURAR NDK (Manual e Explícito)
+      - name: Install NDK r25c
+        run: |
+          # Instala NDK via sdkmanager
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.2.9519653"
+          
+          # Define a variavel para os proximos passos
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
+
+      # 3. RECRIAR go.mod LIMPO
       - name: Init Clean Go Module
         run: |
+          # Inicializa o modulo sem dependencias de PC
           go mod init github.com/kaishuu0123/chibisnes
 
-      # 3. MANIFESTO
+      # 4. MANIFESTO
       - name: Create AndroidManifest.xml
         run: |
           cat << 'EOF' > cmd/mobile/AndroidManifest.xml
@@ -53,7 +62,7 @@ jobs:
           </manifest>
           EOF
 
-      # 4. CÓDIGO GO NATIVO (GL ES 2.0)
+      # 5. CÓDIGO GO NATIVO (GL ES 2.0)
       - name: Create cmd/mobile/main.go
         run: |
           cat << 'EOF' > cmd/mobile/main.go
@@ -287,11 +296,11 @@ jobs:
           }
           EOF
 
-      # 5. DUMMY ROM
+      # 6. DUMMY ROM
       - name: Create Dummy ROM
         run: dd if=/dev/zero of=cmd/mobile/assets/game.sfc bs=1024 count=1024
 
-      # 6. CONFIGURAR AMBIENTE E NDK (NDK FIXO)
+      # 7. SETUP DE BUILD E COMPILAÇÃO
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with: { java-version: '17', distribution: 'temurin' }
@@ -300,21 +309,15 @@ jobs:
         uses: actions/setup-go@v4
         with: { go-version: 'stable' }
 
-      # Usando NDK r25c via action (Maneira mais segura de setar o PATH)
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r25c
-          add-to-path: true
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # 7. BUILD
       - name: Build Pure Go APK
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
+          # Valida o ambiente
+          echo "NDK: $ANDROID_NDK_HOME"
+          ls -d $ANDROID_NDK_HOME || echo "NDK NAO ENCONTRADO"
+
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
           
@@ -326,8 +329,6 @@ jobs:
           go get github.com/edsrzf/mmap-go # Dependencia do emulador
           go mod tidy
 
-          echo "NDK: $ANDROID_NDK_HOME"
-          
           # Compila
           CGO_ENABLED=1 gomobile build -x -target=android -androidapi 21 -o chibisnes.apk ./cmd/mobile
 
@@ -336,7 +337,7 @@ jobs:
           git config --global user.name "AutoPort"
           git config --global user.email "autoport@bot"
           git add .
-          git commit -m "Pure Go Clean Deps Build" || echo "Nada novo"
+          git commit -m "Pure Go Clean Build" || echo "Nada novo"
           git push
 
       - name: Upload APK
