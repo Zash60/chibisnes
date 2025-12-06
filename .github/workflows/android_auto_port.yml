@@ -1,4 +1,4 @@
-name: Android Auto-Port Final
+name: Android Fix Crash & Build
 
 on:
   workflow_dispatch:
@@ -9,28 +9,20 @@ permissions:
   contents: write
 
 jobs:
-  convert-and-build:
+  fix-and-build:
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. LIMPEZA
-      - name: Clean Desktop Files & Create Directories
+      # ---------------------------------------------------------
+      # 1. CORREÇÃO DOS ARQUIVOS (FIX DO LOG DE ERRO)
+      # ---------------------------------------------------------
+      
+      - name: Apply Go Fixes (Prevent Panic/Crash)
         run: |
-          rm -rf cmd internal build .github/workflows/release.yml || true
-          
           mkdir -p mobile
-          mkdir -p android/app/src/main/java/com/kaishuu0123/chibisnes
-          mkdir -p android/app/src/main/res/layout
-          mkdir -p android/app/src/main/res/values
-          mkdir -p android/app/src/main/res/mipmap-hdpi
-          mkdir -p android/app/libs
-
-      # 2. CRIAÇÃO DA PONTE GO
-      - name: Generate mobile/lib.go
-        run: |
           cat << 'EOF' > mobile/lib.go
           package mobile
 
@@ -42,15 +34,27 @@ jobs:
 
           func Start(romData []byte) string {
             if len(romData) == 0 { return "ROM vazia" }
-            console = chibisnes.NewConsole()
-            if err := console.LoadROM("game.sfc", romData, len(romData)); err != nil {
+            
+            // Reinicia console se ja existir
+            if console != nil {
+               console.Close()
+               console = nil
+            }
+
+            newConsole := chibisnes.NewConsole()
+            if err := newConsole.LoadROM("game.sfc", romData, len(romData)); err != nil {
                return err.Error()
             }
+            
+            // Atribui apenas se carregou com sucesso
+            console = newConsole
             return ""
           }
 
           func RunFrame() []byte {
+            // CORREÇÃO: Evita crash se console for nil
             if console == nil { return nil }
+            
             console.RunFrame()
             
             width, height := 512, 478
@@ -60,7 +64,9 @@ jobs:
           }
 
           func GetAudioSamples() []byte {
+            // CORREÇÃO: Evita crash se console for nil
             if console == nil { return nil }
+            
             pcm := make([]int16, 735*2)
             console.SetAudioSamples(pcm, 735)
             
@@ -72,7 +78,7 @@ jobs:
             return out
           }
 
-          // CORREÇÃO: int32 para compatibilidade com Kotlin Int
+          // CORREÇÃO: int32 para compatibilidade e check de nil
           func SetInput(btnID int32, pressed bool) {
             if console != nil {
               console.SetButtonState(1, int(btnID), pressed)
@@ -80,111 +86,9 @@ jobs:
           }
           EOF
 
-      # 3. ARQUIVOS GRADLE
-      - name: Generate Root build.gradle
+      - name: Apply Kotlin Fixes (Safe Loop)
         run: |
-          cat << 'EOF' > android/build.gradle
-          buildscript {
-              repositories { google(); mavenCentral() }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.0'
-                  classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20'
-              }
-          }
-          allprojects { repositories { google(); mavenCentral() } }
-          task clean(type: Delete) { delete rootProject.buildDir }
-          EOF
-
-      - name: Generate settings.gradle
-        run: echo "rootProject.name = 'ChibiSNES'; include ':app'" > android/settings.gradle
-
-      - name: Generate app/build.gradle
-        run: |
-          cat << 'EOF' > android/app/build.gradle
-          plugins {
-              id 'com.android.application'
-              id 'org.jetbrains.kotlin.android'
-          }
-
-          android {
-              namespace 'com.kaishuu0123.chibisnes'
-              compileSdk 34
-
-              defaultConfig {
-                  applicationId "com.kaishuu0123.chibisnes"
-                  minSdk 26
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-                  ndk { abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64' }
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_1_8
-                  targetCompatibility JavaVersion.VERSION_1_8
-              }
-              kotlinOptions { jvmTarget = '1.8' }
-              
-              sourceSets { main { jniLibs.srcDirs = ['src/main/jniLibs'] } }
-          }
-
-          dependencies {
-              implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
-              implementation 'androidx.core:core-ktx:1.12.0'
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.11.0'
-              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-          }
-          EOF
-
-      # 4. CÓDIGO KOTLIN
-      - name: Generate AndroidManifest.xml
-        run: |
-          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <application android:label="ChibiSNES" android:theme="@style/Theme.AppCompat.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-                  <activity android:name=".EmulatorActivity" 
-                            android:screenOrientation="landscape"
-                            android:configChanges="orientation|screenSize|keyboardHidden"/>
-              </application>
-          </manifest>
-          EOF
-
-      - name: Generate MainActivity.kt
-        run: |
-          cat << 'EOF' > android/app/src/main/java/com/kaishuu0123/chibisnes/MainActivity.kt
-          package com.kaishuu0123.chibisnes
-          import android.content.Intent
-          import android.os.Bundle
-          import android.widget.Button
-          import androidx.activity.result.contract.ActivityResultContracts
-          import androidx.appcompat.app.AppCompatActivity
-
-          class MainActivity : AppCompatActivity() {
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  setContentView(R.layout.activity_main)
-                  val picker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-                      uri?.let {
-                          val i = Intent(this, EmulatorActivity::class.java)
-                          i.data = it
-                          startActivity(i)
-                      }
-                  }
-                  findViewById<Button>(R.id.btnLoad).setOnClickListener { picker.launch("*/*") }
-              }
-          }
-          EOF
-
-      - name: Generate EmulatorActivity.kt
-        run: |
+          mkdir -p android/app/src/main/java/com/kaishuu0123/chibisnes
           cat << 'EOF' > android/app/src/main/java/com/kaishuu0123/chibisnes/EmulatorActivity.kt
           package com.kaishuu0123.chibisnes
           import android.graphics.*
@@ -222,9 +126,12 @@ jobs:
               }
               private fun bind(id: Int, emuId: Int) {
                   findViewById<View>(id).setOnTouchListener { _, e ->
-                      when(e.action) {
-                          MotionEvent.ACTION_DOWN -> Mobile.setInput(emuId, true)
-                          MotionEvent.ACTION_UP -> Mobile.setInput(emuId, false)
+                      // Check rapido para nao mandar input se nao estiver rodando
+                      if (running) {
+                          when(e.action) {
+                              MotionEvent.ACTION_DOWN -> Mobile.setInput(emuId, true)
+                              MotionEvent.ACTION_UP -> Mobile.setInput(emuId, false)
+                          }
                       }
                       true
                   }
@@ -245,10 +152,14 @@ jobs:
                       val rect = Rect()
                       while (running) {
                           val start = System.currentTimeMillis()
+                          
+                          // Chamadas seguras ao Go
                           val pixels = Mobile.runFrame()
                           val audio = Mobile.getAudioSamples()
 
                           if (audio != null) audioTrack?.write(audio, 0, audio.size)
+                          
+                          // So desenha se pixels nao for nulo
                           if (pixels != null) {
                               val holder = surfaceView.holder
                               if (holder.surface.isValid) {
@@ -275,36 +186,9 @@ jobs:
           }
           EOF
 
-      - name: Generate Layouts
-        run: |
-          cat << 'EOF' > android/app/src/main/res/layout/activity_main.xml
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="match_parent" android:layout_height="match_parent"
-              android:gravity="center" android:orientation="vertical">
-              <Button android:id="@+id/btnLoad" android:text="Load ROM" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
-          </LinearLayout>
-          EOF
-
-          cat << 'EOF' > android/app/src/main/res/layout/activity_emulator.xml
-          <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="match_parent" android:layout_height="match_parent" android:background="#000">
-              <SurfaceView android:id="@+id/surface" android:layout_width="match_parent" android:layout_height="match_parent" />
-              <Button android:id="@+id/btnUp" android:text="^" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginLeft="60dp" android:layout_marginBottom="110dp"/>
-              <Button android:id="@+id/btnDown" android:text="v" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginLeft="60dp" android:layout_marginBottom="10dp"/>
-              <Button android:id="@+id/btnLeft" android:text="&lt;" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginLeft="10dp" android:layout_marginBottom="60dp"/>
-              <Button android:id="@+id/btnRight" android:text="&gt;" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginLeft="110dp" android:layout_marginBottom="60dp"/>
-              <Button android:id="@+id/btnA" android:text="A" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_alignParentRight="true" android:layout_marginRight="10dp" android:layout_marginBottom="60dp"/>
-              <Button android:id="@+id/btnB" android:text="B" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_alignParentRight="true" android:layout_marginRight="60dp" android:layout_marginBottom="20dp"/>
-              <Button android:id="@+id/btnX" android:text="X" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_alignParentRight="true" android:layout_marginRight="60dp" android:layout_marginBottom="100dp"/>
-              <Button android:id="@+id/btnY" android:text="Y" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_alignParentRight="true" android:layout_marginRight="110dp" android:layout_marginBottom="60dp"/>
-              <Button android:id="@+id/btnStart" android:text="St" android:layout_width="50dp" android:layout_height="40dp" android:layout_alignParentBottom="true" android:layout_centerHorizontal="true" android:layout_marginBottom="10dp" />
-              <Button android:id="@+id/btnSelect" android:text="Sel" android:layout_width="50dp" android:layout_height="40dp" android:layout_alignParentBottom="true" android:layout_centerHorizontal="true" android:layout_marginRight="60dp" android:layout_marginBottom="10dp" />
-              <Button android:id="@+id/btnL" android:text="L" android:layout_width="60dp" android:layout_height="40dp" android:layout_alignParentTop="true" android:layout_alignParentLeft="true" />
-              <Button android:id="@+id/btnR" android:text="R" android:layout_width="60dp" android:layout_height="40dp" android:layout_alignParentTop="true" android:layout_alignParentRight="true" />
-          </RelativeLayout>
-          EOF
-
-      # 5. BUILD E UPLOAD
+      # ---------------------------------------------------------
+      # 2. CONFIGURAÇÃO DE AMBIENTE
+      # ---------------------------------------------------------
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with: { java-version: '17', distribution: 'temurin' }
@@ -316,51 +200,52 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Go Library
+      # ---------------------------------------------------------
+      # 3. BUILD DAS LIBS (GOMOBILE)
+      # ---------------------------------------------------------
+      - name: Build Go Library (Android API 21)
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
           go get golang.org/x/mobile/bind
+          mkdir -p android/app/libs
+          # Compila a lib Go corrigida
           gomobile bind -target=android -androidapi 21 -o android/app/libs/chibisnes.aar ./mobile
 
-      # CORREÇÃO NUCLEAR: GERA O WRAPPER EM AMBIENTE ISOLADO
+      # ---------------------------------------------------------
+      # 4. CONFIGURAÇÃO DO GRADLE (WRAPPER SEGURO)
+      # ---------------------------------------------------------
       - name: Force Gradle Wrapper 8.2
         working-directory: ./android
         run: |
           echo "android.useAndroidX=true" > gradle.properties
-          
-          # Cria pasta temporaria isolada
           mkdir temp_wrapper_gen
           cd temp_wrapper_gen
-          
-          # Arquivo settings.gradle minimo para o Gradle 9 nao travar
           touch settings.gradle
-          
-          # Gera o wrapper 8.2 (Aqui funciona porque não tem build.gradle quebrando)
           gradle wrapper --gradle-version 8.2 --distribution-type bin
-          
-          # Move os arquivos gerados (gradlew, pasta gradle) para a raiz do android
           cp -r gradle ../
           cp gradlew ../
           cp gradlew.bat ../
-          
           cd ..
           rm -rf temp_wrapper_gen
-          
-          # Permissao de execucao
           chmod +x gradlew
 
-      - name: Build APK (AssembleDebug)
+      # ---------------------------------------------------------
+      # 5. BUILD DO APK
+      # ---------------------------------------------------------
+      - name: Build APK
         working-directory: ./android
-        # Agora ./gradlew É a versao 8.2, entao vai baixar o 8.2 e rodar certo
         run: ./gradlew assembleDebug
 
-      - name: Commit Changes
+      # ---------------------------------------------------------
+      # 6. COMMIT E UPLOAD
+      # ---------------------------------------------------------
+      - name: Commit Changes (Save Fixes)
         run: |
           git config --global user.name "AutoPort"
           git config --global user.email "autoport@bot"
           git add .
-          git commit -m "Android Port Final Fix" || echo "Nada novo"
+          git commit -m "Fix Panic/Crash in Go and Kotlin" || echo "Nada novo"
           git push
 
       - name: Upload APK
