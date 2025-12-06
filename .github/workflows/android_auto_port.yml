@@ -1,4 +1,4 @@
-name: Android Auto-Port & Build Fix
+name: Android Auto-Port Final Fix
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. LIMPEZA E PREPARAÇÃO
+      # 1. LIMPEZA
       - name: Clean Desktop Files & Create Directories
         run: |
           rm -rf cmd internal build .github/workflows/release.yml || true
@@ -43,7 +43,6 @@ jobs:
           func Start(romData []byte) string {
             if len(romData) == 0 { return "ROM vazia" }
             console = chibisnes.NewConsole()
-            // Nome ficticio para carregar
             if err := console.LoadROM("game.sfc", romData, len(romData)); err != nil {
                return err.Error()
             }
@@ -54,8 +53,6 @@ jobs:
             if console == nil { return nil }
             console.RunFrame()
             
-            // Buffer fixo 512x478 (máximo possível do SNES interlace)
-            // Ajuste se o emulador retornar tamanho diferente
             width, height := 512, 478
             buf := make([]byte, width*height*4) 
             console.SetPixels(buf)
@@ -64,7 +61,6 @@ jobs:
 
           func GetAudioSamples() []byte {
             if console == nil { return nil }
-            // 735 samples * 2 canais
             pcm := make([]int16, 735*2)
             console.SetAudioSamples(pcm, 735)
             
@@ -83,17 +79,36 @@ jobs:
           }
           EOF
 
-      # 3. CRIAÇÃO DOS ARQUIVOS ANDROID
+      # 3. CRIAÇÃO DOS ARQUIVOS GRADLE (A CORREÇÃO PRINCIPAL ESTÁ AQUI)
+      
+      # Cria o build.gradle da RAIZ (android/build.gradle) para definir os plugins
+      - name: Generate Root build.gradle
+        run: |
+          cat << 'EOF' > android/build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.2.0'
+                  classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          task clean(type: Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+
       - name: Generate settings.gradle
         run: |
           cat << 'EOF' > android/settings.gradle
-          pluginManagement {
-              repositories { google(); mavenCentral(); gradlePluginPortal() }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories { google(); mavenCentral() }
-          }
           rootProject.name = "ChibiSNES"
           include ':app'
           EOF
@@ -133,6 +148,7 @@ jobs:
           }
           EOF
 
+      # 4. CÓDIGO FONTE ANDROID (KOTLIN)
       - name: Generate AndroidManifest.xml
         run: |
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
@@ -211,7 +227,6 @@ jobs:
               }
 
               private fun setupBtns() {
-                  // Mapeamento: B=0, Y=1, Select=2, Start=3, Up=4, Down=5, Left=6, Right=7, A=8, X=9, L=10, R=11
                   bind(R.id.btnUp, 4); bind(R.id.btnDown, 5); bind(R.id.btnLeft, 6); bind(R.id.btnRight, 7)
                   bind(R.id.btnA, 8); bind(R.id.btnB, 0); bind(R.id.btnX, 9); bind(R.id.btnY, 1)
                   bind(R.id.btnStart, 3); bind(R.id.btnSelect, 2); bind(R.id.btnL, 10); bind(R.id.btnR, 11)
@@ -273,7 +288,6 @@ jobs:
 
       - name: Generate Layouts
         run: |
-          # MAIN
           cat << 'EOF' > android/app/src/main/res/layout/activity_main.xml
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent" android:layout_height="match_parent"
@@ -282,7 +296,6 @@ jobs:
           </LinearLayout>
           EOF
 
-          # EMULATOR
           cat << 'EOF' > android/app/src/main/res/layout/activity_emulator.xml
           <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent" android:layout_height="match_parent" android:background="#000">
@@ -305,7 +318,7 @@ jobs:
           </RelativeLayout>
           EOF
 
-      # 4. CONFIGURAÇÃO E BUILD
+      # 5. AMBIENTE E BUILD (COM CORREÇÃO DE YAML E GOMOBILE)
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -325,11 +338,9 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
-      - name: Build Go Library (FIX:Android API 21)
+      - name: Build Go Library (Android API 21)
         run: |
-          go get golang.org/x/mobile/bind
           mkdir -p android/app/src/main/jniLibs
-          # AQUI ESTÁ A CORREÇÃO: -androidapi 21
           gomobile bind -target=android -androidapi 21 -o android/app/src/main/jniLibs/chibisnes.aar ./mobile
 
       - name: Build APK
@@ -338,13 +349,13 @@ jobs:
           gradle wrapper
           ./gradlew assembleDebug
 
-      # 5. COMMIT E UPLOAD
+      # 6. COMMIT E UPLOAD
       - name: Commit Changes
         run: |
           git config --global user.name "AutoPort"
           git config --global user.email "autoport@bot"
           git add .
-          git commit -m "Android Port com Fix API 21" || echo "Nada novo"
+          git commit -m "Android Port Final Fix" || echo "Nada novo"
           git push
 
       - name: Upload APK
