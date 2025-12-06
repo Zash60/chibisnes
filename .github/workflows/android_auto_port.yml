@@ -26,10 +26,9 @@ jobs:
           mkdir -p android/app/src/main/res/layout
           mkdir -p android/app/src/main/res/values
           mkdir -p android/app/src/main/res/mipmap-hdpi
-          mkdir -p android/gradle/wrapper
           mkdir -p android/app/libs
 
-      # 2. CRIAÇÃO DA PONTE GO (COM CORREÇÃO INT32)
+      # 2. CRIAÇÃO DA PONTE GO
       - name: Generate mobile/lib.go
         run: |
           cat << 'EOF' > mobile/lib.go
@@ -73,7 +72,7 @@ jobs:
             return out
           }
 
-          // CORREÇÃO: int32 mapeia para Int no Kotlin. int mapeia para Long.
+          // CORREÇÃO: int32 para compatibilidade com Kotlin Int
           func SetInput(btnID int32, pressed bool) {
             if console != nil {
               console.SetButtonState(1, int(btnID), pressed)
@@ -81,7 +80,7 @@ jobs:
           }
           EOF
 
-      # 3. ARQUIVOS DE CONFIGURAÇÃO GRADLE
+      # 3. ARQUIVOS GRADLE
       - name: Generate Root build.gradle
         run: |
           cat << 'EOF' > android/build.gradle
@@ -217,8 +216,6 @@ jobs:
               }
 
               private fun setupBtns() {
-                  // Mapeamento ChibiSNES: 
-                  // B=0, Y=1, Select=2, Start=3, Up=4, Down=5, Left=6, Right=7, A=8, X=9, L=10, R=11
                   bind(R.id.btnUp, 4); bind(R.id.btnDown, 5); bind(R.id.btnLeft, 6); bind(R.id.btnRight, 7)
                   bind(R.id.btnA, 8); bind(R.id.btnB, 0); bind(R.id.btnX, 9); bind(R.id.btnY, 1)
                   bind(R.id.btnStart, 3); bind(R.id.btnSelect, 2); bind(R.id.btnL, 10); bind(R.id.btnR, 11)
@@ -319,26 +316,51 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Go Library (Android API 21)
+      - name: Build Go Library
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
           go get golang.org/x/mobile/bind
           gomobile bind -target=android -androidapi 21 -o android/app/libs/chibisnes.aar ./mobile
 
-      - name: Build APK
+      # CORREÇÃO NUCLEAR: GERA O WRAPPER EM AMBIENTE ISOLADO
+      - name: Force Gradle Wrapper 8.2
         working-directory: ./android
         run: |
           echo "android.useAndroidX=true" > gradle.properties
-          gradle wrapper --gradle-version 8.2
-          ./gradlew assembleDebug
+          
+          # Cria pasta temporaria isolada
+          mkdir temp_wrapper_gen
+          cd temp_wrapper_gen
+          
+          # Arquivo settings.gradle minimo para o Gradle 9 nao travar
+          touch settings.gradle
+          
+          # Gera o wrapper 8.2 (Aqui funciona porque não tem build.gradle quebrando)
+          gradle wrapper --gradle-version 8.2 --distribution-type bin
+          
+          # Move os arquivos gerados (gradlew, pasta gradle) para a raiz do android
+          cp -r gradle ../
+          cp gradlew ../
+          cp gradlew.bat ../
+          
+          cd ..
+          rm -rf temp_wrapper_gen
+          
+          # Permissao de execucao
+          chmod +x gradlew
+
+      - name: Build APK (AssembleDebug)
+        working-directory: ./android
+        # Agora ./gradlew É a versao 8.2, entao vai baixar o 8.2 e rodar certo
+        run: ./gradlew assembleDebug
 
       - name: Commit Changes
         run: |
           git config --global user.name "AutoPort"
           git config --global user.email "autoport@bot"
           git add .
-          git commit -m "Android Port Type Fix" || echo "Nada novo"
+          git commit -m "Android Port Final Fix" || echo "Nada novo"
           git push
 
       - name: Upload APK
