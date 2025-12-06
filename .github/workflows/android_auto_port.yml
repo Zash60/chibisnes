@@ -1,4 +1,4 @@
-name: Android Auto-Port Final Fix
+name: Android Auto-Port Final
 
 on:
   workflow_dispatch:
@@ -27,8 +27,9 @@ jobs:
           mkdir -p android/app/src/main/res/values
           mkdir -p android/app/src/main/res/mipmap-hdpi
           mkdir -p android/gradle/wrapper
+          mkdir -p android/app/libs
 
-      # 2. CRIAÇÃO DA PONTE GO
+      # 2. CRIAÇÃO DA PONTE GO (COM CORREÇÃO INT32)
       - name: Generate mobile/lib.go
         run: |
           cat << 'EOF' > mobile/lib.go
@@ -72,46 +73,31 @@ jobs:
             return out
           }
 
-          func SetInput(btnID int, pressed bool) {
+          // CORREÇÃO: int32 mapeia para Int no Kotlin. int mapeia para Long.
+          func SetInput(btnID int32, pressed bool) {
             if console != nil {
-              console.SetButtonState(1, btnID, pressed)
+              console.SetButtonState(1, int(btnID), pressed)
             }
           }
           EOF
 
-      # 3. CRIAÇÃO DOS ARQUIVOS GRADLE (A CORREÇÃO PRINCIPAL ESTÁ AQUI)
-      
-      # Cria o build.gradle da RAIZ (android/build.gradle) para definir os plugins
+      # 3. ARQUIVOS DE CONFIGURAÇÃO GRADLE
       - name: Generate Root build.gradle
         run: |
           cat << 'EOF' > android/build.gradle
           buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
+              repositories { google(); mavenCentral() }
               dependencies {
                   classpath 'com.android.tools.build:gradle:8.2.0'
                   classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20'
               }
           }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          task clean(type: Delete) {
-              delete rootProject.buildDir
-          }
+          allprojects { repositories { google(); mavenCentral() } }
+          task clean(type: Delete) { delete rootProject.buildDir }
           EOF
 
       - name: Generate settings.gradle
-        run: |
-          cat << 'EOF' > android/settings.gradle
-          rootProject.name = "ChibiSNES"
-          include ':app'
-          EOF
+        run: echo "rootProject.name = 'ChibiSNES'; include ':app'" > android/settings.gradle
 
       - name: Generate app/build.gradle
         run: |
@@ -131,24 +117,20 @@ jobs:
                   targetSdk 34
                   versionCode 1
                   versionName "1.0"
-                  ndk {
-                    abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
-                  }
+                  ndk { abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64' }
               }
 
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
                   targetCompatibility JavaVersion.VERSION_1_8
               }
-              kotlinOptions {
-                  jvmTarget = '1.8'
-              }
+              kotlinOptions { jvmTarget = '1.8' }
+              
+              sourceSets { main { jniLibs.srcDirs = ['src/main/jniLibs'] } }
           }
 
           dependencies {
-              // CORREÇÃO: Importar bibliotecas locais (.aar) da pasta libs
               implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
-              
               implementation 'androidx.core:core-ktx:1.12.0'
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'com.google.android.material:material:1.11.0'
@@ -156,7 +138,7 @@ jobs:
           }
           EOF
 
-      # 4. CÓDIGO FONTE ANDROID (KOTLIN)
+      # 4. CÓDIGO KOTLIN
       - name: Generate AndroidManifest.xml
         run: |
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
@@ -235,6 +217,8 @@ jobs:
               }
 
               private fun setupBtns() {
+                  // Mapeamento ChibiSNES: 
+                  // B=0, Y=1, Select=2, Start=3, Up=4, Down=5, Left=6, Right=7, A=8, X=9, L=10, R=11
                   bind(R.id.btnUp, 4); bind(R.id.btnDown, 5); bind(R.id.btnLeft, 6); bind(R.id.btnRight, 7)
                   bind(R.id.btnA, 8); bind(R.id.btnB, 0); bind(R.id.btnX, 9); bind(R.id.btnY, 1)
                   bind(R.id.btnStart, 3); bind(R.id.btnSelect, 2); bind(R.id.btnL, 10); bind(R.id.btnR, 11)
@@ -308,17 +292,14 @@ jobs:
           <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent" android:layout_height="match_parent" android:background="#000">
               <SurfaceView android:id="@+id/surface" android:layout_width="match_parent" android:layout_height="match_parent" />
-              
               <Button android:id="@+id/btnUp" android:text="^" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginLeft="60dp" android:layout_marginBottom="110dp"/>
               <Button android:id="@+id/btnDown" android:text="v" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginLeft="60dp" android:layout_marginBottom="10dp"/>
               <Button android:id="@+id/btnLeft" android:text="&lt;" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginLeft="10dp" android:layout_marginBottom="60dp"/>
               <Button android:id="@+id/btnRight" android:text="&gt;" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginLeft="110dp" android:layout_marginBottom="60dp"/>
-
               <Button android:id="@+id/btnA" android:text="A" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_alignParentRight="true" android:layout_marginRight="10dp" android:layout_marginBottom="60dp"/>
               <Button android:id="@+id/btnB" android:text="B" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_alignParentRight="true" android:layout_marginRight="60dp" android:layout_marginBottom="20dp"/>
               <Button android:id="@+id/btnX" android:text="X" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_alignParentRight="true" android:layout_marginRight="60dp" android:layout_marginBottom="100dp"/>
               <Button android:id="@+id/btnY" android:text="Y" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_alignParentRight="true" android:layout_marginRight="110dp" android:layout_marginBottom="60dp"/>
-
               <Button android:id="@+id/btnStart" android:text="St" android:layout_width="50dp" android:layout_height="40dp" android:layout_alignParentBottom="true" android:layout_centerHorizontal="true" android:layout_marginBottom="10dp" />
               <Button android:id="@+id/btnSelect" android:text="Sel" android:layout_width="50dp" android:layout_height="40dp" android:layout_alignParentBottom="true" android:layout_centerHorizontal="true" android:layout_marginRight="60dp" android:layout_marginBottom="10dp" />
               <Button android:id="@+id/btnL" android:text="L" android:layout_width="60dp" android:layout_height="40dp" android:layout_alignParentTop="true" android:layout_alignParentLeft="true" />
@@ -326,66 +307,38 @@ jobs:
           </RelativeLayout>
           EOF
 
-      # 5. AMBIENTE E BUILD (COM CORREÇÃO DE YAML E GOMOBILE)
+      # 5. BUILD E UPLOAD
       - name: Setup JDK 17
         uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
+        with: { java-version: '17', distribution: 'temurin' }
 
-      - name: Setup Go (Latest)
+      - name: Setup Go
         uses: actions/setup-go@v4
-        with:
-          go-version: 'stable' 
+        with: { go-version: 'stable' }
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Gomobile
+      - name: Build Go Library (Android API 21)
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
-
-      - name: Build Go Library (Android API 21)
-        run: |
           go get golang.org/x/mobile/bind
-          
-          # CORREÇÃO: Salvar na pasta 'libs' para o Gradle encontrar como dependência
-          mkdir -p android/app/libs
-          
           gomobile bind -target=android -androidapi 21 -o android/app/libs/chibisnes.aar ./mobile
 
       - name: Build APK
         working-directory: ./android
         run: |
-          # 1. Salva os arquivos de configuração reais
-          mv build.gradle build.gradle.real
-          mv settings.gradle settings.gradle.real
-          
-          # 2. Cria settings falso para o Gradle 9 não reclamar
-          echo "rootProject.name = 'temp'" > settings.gradle
-          
-          # 3. Gera o Wrapper 8.2 (compatível)
-          gradle wrapper --gradle-version 8.2 --distribution-type bin --no-daemon
-          
-          # 4. Restaura os arquivos reais
-          mv build.gradle.real build.gradle
-          mv settings.gradle.real settings.gradle
-          
-          # 5. CORREÇÃO: Cria o gradle.properties exigido pelo AndroidX
           echo "android.useAndroidX=true" > gradle.properties
-          
-          # 6. Executa o Build
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          gradle wrapper --gradle-version 8.2
+          ./gradlew assembleDebug
 
-      # 6. COMMIT E UPLOAD
       - name: Commit Changes
         run: |
           git config --global user.name "AutoPort"
           git config --global user.email "autoport@bot"
           git add .
-          git commit -m "Android Port Final Fix" || echo "Nada novo"
+          git commit -m "Android Port Type Fix" || echo "Nada novo"
           git push
 
       - name: Upload APK
