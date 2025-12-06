@@ -7,31 +7,34 @@ import (
 
 var (
 	console *chibisnes.Console
-	mu      sync.Mutex // O "Sinal de Pare" para as Threads
+	mu      sync.Mutex // Bloqueio de segurança (Mutex)
 )
 
+// Start carrega a ROM e inicializa o sistema
 func Start(romData []byte) string {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if len(romData) == 0 {
-		return "ROM vazia"
+		return "Erro: Dados da ROM vazios"
 	}
 
+	// Limpa instância anterior se existir
 	if console != nil {
 		console.Close()
 		console = nil
 	}
 
-	newConsole := chibisnes.NewConsole()
-	if err := newConsole.LoadROM("game.sfc", romData, len(romData)); err != nil {
-		return err.Error()
+	newC := chibisnes.NewConsole()
+	if err := newC.LoadROM("game.sfc", romData, len(romData)); err != nil {
+		return "Falha ao carregar ROM: " + err.Error()
 	}
 
-	console = newConsole
+	console = newC
 	return ""
 }
 
+// RunFrame avança a emulação e retorna a imagem
 func RunFrame() []byte {
 	mu.Lock()
 	defer mu.Unlock()
@@ -42,14 +45,21 @@ func RunFrame() []byte {
 
 	console.RunFrame()
 
-	// Ajuste o tamanho se necessário (256x224 ou 512x448 dependendo da escala interna)
-	// Usando buffer seguro
-	width, height := 512, 478
+	// Tamanho máximo seguro para o buffer do SNES (512x480 RGBA)
+	// Se esse buffer for menor que o necessário, o Go da Panic.
+	const width = 512
+	const height = 478 // 239 linhas * 2 (interlace/doubling)
+	
+	// Cria buffer limpo
 	buf := make([]byte, width*height*4)
+	
+	// Preenche com pixels do emulador
 	console.SetPixels(buf)
+	
 	return buf
 }
 
+// GetAudioSamples pega o áudio gerado
 func GetAudioSamples() []byte {
 	mu.Lock()
 	defer mu.Unlock()
@@ -58,10 +68,11 @@ func GetAudioSamples() []byte {
 		return nil
 	}
 
-	// 735 samples * 2 canais * 2 bytes
+	// 735 samples * 2 canais * 2 bytes (16-bit)
 	pcm := make([]int16, 735*2)
 	console.SetAudioSamples(pcm, 735)
 
+	// Converte int16 para byte (Little Endian)
 	out := make([]byte, len(pcm)*2)
 	for i, v := range pcm {
 		out[i*2] = byte(v)
@@ -70,11 +81,13 @@ func GetAudioSamples() []byte {
 	return out
 }
 
+// SetInput envia o comando do controle
 func SetInput(btnID int32, pressed bool) {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if console != nil {
+		// btnID vem do Android como int32, convertemos para int do Go
 		console.SetButtonState(1, int(btnID), pressed)
 	}
 }
