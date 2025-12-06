@@ -1,4 +1,4 @@
-name: Pure Go Android Build
+name: Pure Go Android (Storage ROM)
 
 on:
   workflow_dispatch:
@@ -16,19 +16,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------------
-      # 1. LIMPEZA TOTAL (Removemos o projeto Android Studio)
-      # ---------------------------------------------------------
-      - name: Clean Previous Android Project
+      # 1. LIMPEZA TOTAL
+      - name: Clean Everything
         run: |
-          rm -rf android mobile cmd internal .github/workflows/release.yml || true
-          mkdir -p cmd/mobile
-          mkdir -p assets
+          rm -rf android mobile cmd internal build .github/workflows/release.yml || true
+          mkdir -p cmd/mobile/assets
 
-      # ---------------------------------------------------------
-      # 2. CÓDIGO GO NATIVO (OPENGL + TOUCH)
-      # ---------------------------------------------------------
-      - name: Create Native Go Engine
+      # 2. MANIFESTO COM PERMISSÃO DE ARQUIVO
+      - name: Create AndroidManifest.xml
+        run: |
+          cat << 'EOF' > cmd/mobile/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.kaishuu0123.chibisnes"
+              android:versionCode="1"
+              android:versionName="1.0">
+
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+              <application
+                  android:label="ChibiSNES"
+                  android:debuggable="true"
+                  android:requestLegacyExternalStorage="true">
+                  
+                  <activity android:name="org.golang.app.GoNativeActivity"
+                      android:label="ChibiSNES"
+                      android:configChanges="orientation|keyboardHidden|screenSize"
+                      android:exported="true">
+                      <meta-data android:name="android.app.lib_name" android:value="chibisnes" />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+      # 3. CÓDIGO GO NATIVO (COM LEITURA DE ARQUIVO)
+      - name: Create cmd/mobile/main.go
         run: |
           cat << 'EOF' > cmd/mobile/main.go
           package main
@@ -36,9 +64,10 @@ jobs:
           import (
             "encoding/binary"
             "log"
-            "time"
-            "image"
+            "math"
             "sync"
+            "os"
+            "path/filepath"
 
             "golang.org/x/mobile/app"
             "golang.org/x/mobile/event/lifecycle"
@@ -66,7 +95,7 @@ jobs:
 
           const (
             snesW = 512
-            snesH = 478 // Altura segura para interlace
+            snesH = 478
           )
 
           func main() {
@@ -99,27 +128,57 @@ jobs:
             
             if console != nil { return }
 
-            // Tenta carregar ROM dos assets (embutido no APK)
-            f, err := asset.Open("game.sfc")
+            // Lógica de Carregamento de ROM
+            romData, err := loadRomFromStorage()
             if err != nil {
-               log.Println("Erro ao abrir ROM:", err)
-               // Cria console vazio só para não crashar
-               console = chibisnes.NewConsole()
-               return
+                // Fallback: carrega ROM interna (assets) se não achar no storage
+                log.Println("ROM externa não encontrada, tentando interna:", err)
+                romData, err = loadRomFromAssets()
             }
-            defer f.Close()
 
-            // Lê tamanho
-            info, _ := f.Stat()
-            size := info.Size()
-            data := make([]byte, size)
-            f.Read(data)
+            if err != nil || len(romData) == 0 {
+                log.Println("Nenhuma ROM carregada.")
+                // Inicializa vazio para não crashar o OpenGL
+                console = chibisnes.NewConsole()
+                pixels = make([]byte, snesW*snesH*4)
+                return
+            }
 
             console = chibisnes.NewConsole()
-            console.LoadROM("game.sfc", data, int(size))
+            console.LoadROM("game.sfc", romData, len(romData))
             
-            // Prepara buffer de pixels
             pixels = make([]byte, snesW*snesH*4)
+          }
+
+          func loadRomFromStorage() ([]byte, error) {
+             // Tenta caminhos comuns do Android
+             // O usuario deve colocar o arquivo 'game.sfc' na pasta Download
+             paths := []string{
+                 "/sdcard/Download/game.sfc",
+                 "/storage/emulated/0/Download/game.sfc",
+                 "/sdcard/game.sfc",
+                 "/storage/emulated/0/game.sfc",
+             }
+
+             for _, p := range paths {
+                 data, err := os.ReadFile(p)
+                 if err == nil && len(data) > 0 {
+                     log.Println("ROM carregada de:", p)
+                     return data, nil
+                 }
+             }
+             return nil, os.ErrNotExist
+          }
+
+          func loadRomFromAssets() ([]byte, error) {
+             f, err := asset.Open("game.sfc")
+             if err != nil { return nil, err }
+             defer f.Close()
+             
+             info, _ := f.Stat()
+             data := make([]byte, info.Size())
+             f.Read(data)
+             return data, nil
           }
 
           func onStart() {
@@ -149,11 +208,8 @@ jobs:
             gl.BindTexture(gl.TEXTURE_2D, texture)
             gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
             gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-            
-            // Aloca textura vazia
             gl.TexImage2D(gl.TEXTURE_2D, 0, snesW, snesH, gl.RGBA, gl.UNSIGNED_BYTE, nil)
 
-            // Quad vertices (Full Screen)
             buf = gl.CreateBuffer()
             gl.BindBuffer(gl.ARRAY_BUFFER, buf)
             gl.BufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW)
@@ -170,10 +226,7 @@ jobs:
             if console != nil {
                console.RunFrame()
                console.SetPixels(pixels)
-               
-               // Upload textura
                gl.BindTexture(gl.TEXTURE_2D, texture)
-               // Hack: TexSubImage é mais rapido, mas TexImage é mais simples para evitar erros de formato agora
                gl.TexImage2D(gl.TEXTURE_2D, 0, snesW, snesH, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
             }
             mu.Unlock()
@@ -193,112 +246,80 @@ jobs:
             gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
 
             a.Publish()
-            
-            // Força repaint continuo (Game Loop)
-            a.Send(paint.Event{})
+            a.Send(paint.Event{}) 
           }
 
-          // CONTROLES DE TOQUE (Touchscreen)
-          // Divide a tela em areas para simular controle
           func onTouch(t touch.Event) {
             mu.Lock()
             defer mu.Unlock()
             if console == nil { return }
 
             pressed := t.Type == touch.TypeBegin || t.Type == touch.TypeMove
-            x := t.X
-            y := t.Y
+            x := float32(t.X)
+            y := float32(t.Y)
             w := float32(screenW)
             h := float32(screenH)
 
-            // Lado Esquerdo: D-PAD
-            // Lado Direito: Botões
-            
-            // IDs do ChibiSNES:
-            // B=0, Y=1, Select=2, Start=3, Up=4, Down=5, Left=6, Right=7, A=8, X=9, L=10, R=11
-
+            // Controles simples na tela
             if x < w/2 {
-                // D-PAD Logic (Quadrantes simples na esquerda)
-                centerY := h / 2
-                centerX := w / 4
-                
-                // Zona morta simples
-                console.SetButtonState(1, 4, pressed && y < centerY - 50) // UP
-                console.SetButtonState(1, 5, pressed && y > centerY + 50) // DOWN
-                console.SetButtonState(1, 6, pressed && x < centerX - 50) // LEFT
-                console.SetButtonState(1, 7, pressed && x > centerX + 50) // RIGHT
-                
-                // Select/Start no canto inferior esquerdo
-                console.SetButtonState(1, 2, pressed && y > h - 100 && x < 100) // Select
-                console.SetButtonState(1, 3, pressed && y > h - 100 && x > 100 && x < 200) // Start
-
+                cy := h / 2
+                cx := w / 4
+                console.SetButtonState(1, 4, pressed && y < cy - 50) // UP
+                console.SetButtonState(1, 5, pressed && y > cy + 50) // DOWN
+                console.SetButtonState(1, 6, pressed && x < cx - 50) // LEFT
+                console.SetButtonState(1, 7, pressed && x > cx + 50) // RIGHT
+                console.SetButtonState(1, 2, pressed && y > h - 150 && x < 150) // SEL
+                console.SetButtonState(1, 3, pressed && y > h - 150 && x > 150 && x < 300) // STA
             } else {
-                // Buttons Logic (Direita)
-                // A(dir), B(baixo), X(cima), Y(esq)
-                centerY := h / 2
-                centerX := w * 0.75
-                
-                console.SetButtonState(1, 8, pressed && x > centerX + 50) // A
-                console.SetButtonState(1, 0, pressed && y > centerY + 50) // B
-                console.SetButtonState(1, 9, pressed && y < centerY - 50) // X
-                console.SetButtonState(1, 1, pressed && x < centerX - 50) // Y
+                cy := h / 2
+                cx := w * 0.75
+                console.SetButtonState(1, 8, pressed && x > cx + 50) // A
+                console.SetButtonState(1, 0, pressed && y > cy + 50) // B
+                console.SetButtonState(1, 9, pressed && y < cy - 50) // X
+                console.SetButtonState(1, 1, pressed && x < cx - 50) // Y
             }
           }
 
-          var vertexShader = `#version 100
+          var vertexShader = `
+          #version 100
           attribute vec2 position;
           attribute vec2 texCoord;
           varying vec2 v_texCoord;
           void main() {
             gl_Position = vec4(position, 0.0, 1.0);
             v_texCoord = texCoord;
-          }`
+          }` + "\x00"
 
-          var fragmentShader = `#version 100
+          var fragmentShader = `
+          #version 100
           precision mediump float;
           varying vec2 v_texCoord;
           uniform sampler2D texture;
           void main() {
             gl_FragColor = texture2D(texture, v_texCoord);
-          }`
+          }` + "\x00"
 
           var vertexData = f32Bytes(
-            -1, -1,  0, 1, // Bottom Left
-             1, -1,  1, 1, // Bottom Right
-            -1,  1,  0, 0, // Top Left
-             1,  1,  1, 0, // Top Right
+            -1, -1,  0, 1,
+             1, -1,  1, 1,
+            -1,  1,  0, 0,
+             1,  1,  1, 0,
           )
 
           func f32Bytes(values ...float32) []byte {
             b := make([]byte, 4*len(values))
             for i, v := range values {
-              u := 0 // math.Float32bits(v) -> hack simples abaixo
-              // Gomobile nao tem math simples as vezes, convertendo na mao
-              // Ops, math esta na stdlib.
-              // Simplificando: vamos assumir Endianness do host pois é OpenGL data
-              binary.LittleEndian.PutUint32(b[i*4:], uint32(*(*uint32)(unsafePointer(&v))))
+              binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(v))
             }
             return b
           }
-          
-          import "unsafe"
-          func unsafePointer(f *float32) *uint32 {
-             return (*uint32)(unsafe.Pointer(f))
-          }
           EOF
 
-      # ---------------------------------------------------------
-      # 3. CRIAÇÃO DE ROM FALSA (Para o build não falhar)
-      # ---------------------------------------------------------
+      # 4. CRIAR DUMMY ROM (FALLBACK)
       - name: Create Dummy ROM
-        run: |
-          # Cria um arquivo binário qualquer para ser "embedado" no APK
-          # Você pode substituir isso por um comando 'curl' para baixar uma ROM de homebrew
-          dd if=/dev/zero of=assets/game.sfc bs=1024 count=1024
+        run: dd if=/dev/zero of=cmd/mobile/assets/game.sfc bs=1024 count=1024
 
-      # ---------------------------------------------------------
-      # 4. CONFIGURAÇÃO DO AMBIENTE
-      # ---------------------------------------------------------
+      # 5. CONFIGURAR AMBIENTE
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with: { java-version: '17', distribution: 'temurin' }
@@ -310,37 +331,31 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # ---------------------------------------------------------
-      # 5. BUILD DO APK PURO (GOMOBILE BUILD)
-      # ---------------------------------------------------------
-      - name: Build APK (Pure Go)
+      # 6. BUILD
+      - name: Build Pure Go APK
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
           
-          # Baixa dependências gráficas
           go get golang.org/x/mobile/gl
           go get golang.org/x/mobile/app
           go get golang.org/x/mobile/event/touch
-          
-          # Compila direto para APK incluindo a pasta assets
-          # -target=android gera o APK. 
-          # -assets assets/ inclui o game.sfc
-          gomobile build -target=android -androidapi 21 -assets assets -o chibisnes.apk ./cmd/mobile
+          go get golang.org/x/image/font/gofont/goregular
+          go mod tidy
 
-      # ---------------------------------------------------------
-      # 6. UPLOAD E COMMIT
-      # ---------------------------------------------------------
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: chibisnes-pure-go
-          path: chibisnes.apk
+          # Compila usando o AndroidManifest.xml personalizado que criamos
+          gomobile build -target=android -androidapi 21 -o chibisnes.apk ./cmd/mobile
 
       - name: Commit Changes
         run: |
           git config --global user.name "AutoPort"
           git config --global user.email "autoport@bot"
           git add .
-          git commit -m "Convert to Pure Go Gomobile App" || echo "Nada novo"
+          git commit -m "Pure Go with Storage Access" || echo "Nada novo"
           git push
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chibisnes-pure-go
+          path: chibisnes.apk
