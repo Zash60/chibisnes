@@ -136,7 +136,6 @@ jobs:
                   }
               }
 
-              // CORREÇÃO: Alinhar versões do Java e Kotlin para 1.8
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
                   targetCompatibility JavaVersion.VERSION_1_8
@@ -144,13 +143,12 @@ jobs:
               kotlinOptions {
                   jvmTarget = '1.8'
               }
-
-              sourceSets {
-                  main { jniLibs.srcDirs = ['src/main/jniLibs'] }
-              }
           }
 
           dependencies {
+              // CORREÇÃO: Importar bibliotecas locais (.aar) da pasta libs
+              implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+              
               implementation 'androidx.core:core-ktx:1.12.0'
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'com.google.android.material:material:1.11.0'
@@ -350,11 +348,12 @@ jobs:
 
       - name: Build Go Library (Android API 21)
         run: |
-          # CORREÇÃO: Baixa a dependência obrigatória para o bind funcionar
           go get golang.org/x/mobile/bind
           
-          mkdir -p android/app/src/main/jniLibs
-          gomobile bind -target=android -androidapi 21 -o android/app/src/main/jniLibs/chibisnes.aar ./mobile
+          # CORREÇÃO: Salvar na pasta 'libs' para o Gradle encontrar como dependência
+          mkdir -p android/app/libs
+          
+          gomobile bind -target=android -androidapi 21 -o android/app/libs/chibisnes.aar ./mobile
 
       - name: Build APK
         working-directory: ./android
