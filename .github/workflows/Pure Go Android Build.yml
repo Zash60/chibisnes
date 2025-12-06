@@ -316,7 +316,9 @@ jobs:
       - name: Create Dummy ROM
         run: dd if=/dev/zero of=cmd/mobile/assets/game.sfc bs=1024 count=1024
 
-      # 5. CONFIGURAR AMBIENTE
+      # ---------------------------------------------------------
+      # 4. AMBIENTE (COM CORREÇÃO DE NDK)
+      # ---------------------------------------------------------
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with: { java-version: '17', distribution: 'temurin' }
@@ -325,23 +327,37 @@ jobs:
         uses: actions/setup-go@v4
         with: { go-version: 'stable' }
 
+      # CORREÇÃO: Instala NDK r25b (Estável para Gomobile)
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25b
+          add-to-path: true
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # 6. BUILD
+      # ---------------------------------------------------------
+      # 5. BUILD DO APK PURO (COM CGO E NDK FIX)
+      # ---------------------------------------------------------
       - name: Build Pure Go APK
+        env:
+          # Define explicitamente onde o NDK está (a action setup-ndk define essa env var)
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
           
-          # Baixa dependencias
+          # Baixa dependências
           go get golang.org/x/mobile/gl
           go get golang.org/x/mobile/app
           go get golang.org/x/mobile/event/touch
           go get golang.org/x/image/font/gofont/goregular
           go mod tidy
 
-          # CORREÇÃO: CGO_ENABLED=1 para que o pacote GL seja compilado corretamente
+          echo "Usando NDK em: $ANDROID_NDK_HOME"
+
+          # Compila com CGO ativado e flags de API corretas
           CGO_ENABLED=1 gomobile build -target=android -androidapi 21 -o chibisnes.apk ./cmd/mobile
 
       - name: Commit Changes
