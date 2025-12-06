@@ -1,0 +1,10 @@
+[
+    {
+        "merged": "com.kaishuu0123.chibisnes.app-merged_res-31:/layout_activity_emulator.xml.flat",
+        "source": "com.kaishuu0123.chibisnes.app-main-33:/layout/activity_emulator.xml"
+    },
+    {
+        "merged": "com.kaishuu0123.chibisnes.app-merged_res-31:/layout_activity_main.xml.flat",
+        "source": "com.kaishuu0123.chibisnes.app-main-33:/layout/activity_main.xml"
+    }
+]

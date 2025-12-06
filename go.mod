@@ -1,6 +1,6 @@
 module github.com/kaishuu0123/chibisnes
 
-go 1.18
+go 1.24.0
 
 require (
 	github.com/edsrzf/mmap-go v1.1.0
@@ -10,4 +10,10 @@ require (
 	github.com/veandco/go-sdl2 v0.4.24
 )
 
-require golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e // indirect
+require (
+	golang.org/x/mobile v0.0.0-20251126181937-5c265dc024c4 // indirect
+	golang.org/x/mod v0.30.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/tools v0.39.0 // indirect
+)
