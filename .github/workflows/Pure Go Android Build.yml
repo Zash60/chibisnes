@@ -1,4 +1,4 @@
-name: Pure Go Android Build (Final Fix)
+name: Pure Go Android Fix NDK
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
           rm -rf android mobile cmd internal build .github/workflows/release.yml || true
           mkdir -p cmd/mobile/assets
 
-      # 2. MANIFESTO (Permissões de Arquivo)
+      # 2. MANIFESTO
       - name: Create AndroidManifest.xml
         run: |
           cat << 'EOF' > cmd/mobile/AndroidManifest.xml
@@ -47,7 +47,7 @@ jobs:
           </manifest>
           EOF
 
-      # 3. CÓDIGO GO NATIVO (CORRIGIDO SEM ERROS DE SINTAXE)
+      # 3. CÓDIGO GO NATIVO (CORRIGIDO: io.ReadAll)
       - name: Create cmd/mobile/main.go
         run: |
           cat << 'EOF' > cmd/mobile/main.go
@@ -128,7 +128,6 @@ jobs:
 
             if err != nil || len(romData) == 0 {
                 log.Println("No ROM loaded")
-                // Dummy console
                 console = chibisnes.NewConsole()
                 pixels = make([]byte, snesW*snesH*4)
                 return
@@ -158,6 +157,8 @@ jobs:
              f, err := asset.Open("game.sfc")
              if err != nil { return nil, err }
              defer f.Close()
+             
+             // CORREÇÃO: Usar io.ReadAll ao invés de Stat()
              return io.ReadAll(f)
           }
 
@@ -287,7 +288,7 @@ jobs:
       - name: Create Dummy ROM
         run: dd if=/dev/zero of=cmd/mobile/assets/game.sfc bs=1024 count=1024
 
-      # 5. CONFIGURAR AMBIENTE E NDK
+      # 5. CONFIGURAR AMBIENTE E NDK (CORREÇÃO DE VERSÃO)
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with: { java-version: '17', distribution: 'temurin' }
@@ -296,19 +297,25 @@ jobs:
         uses: actions/setup-go@v4
         with: { go-version: 'stable' }
 
-      # Instala o NDK r25 manualmente (Compatível com gomobile)
-      - name: Install NDK
-        run: |
-          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.2.9519653"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
+      # CORREÇÃO: Usar NDK r21e. O Gomobile é instável com r23+.
+      - name: Setup Android NDK r21e
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r21e
+          add-to-path: true
 
-      # 6. BUILD (GOMOBILE SEM FLAG -NDK)
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 6. BUILD
       - name: Build Pure Go APK
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           
-          # CORREÇÃO: init sem flag -ndk (ele usa a ENV VAR)
-          gomobile init
+          # Inicializa apontando para o NDK r21e baixado
+          gomobile init -ndk $ANDROID_NDK_HOME
           
           go get golang.org/x/mobile/gl
           go get golang.org/x/mobile/app
@@ -316,9 +323,9 @@ jobs:
           go get golang.org/x/image/font/gofont/goregular
           go mod tidy
 
-          echo "Usando NDK em: $ANDROID_NDK_HOME"
+          echo "Usando NDK: $ANDROID_NDK_HOME"
           
-          # Compila com CGO ativado
+          # Compila
           CGO_ENABLED=1 gomobile build -target=android -androidapi 21 -o chibisnes.apk ./cmd/mobile
 
       - name: Commit Changes
@@ -326,7 +333,7 @@ jobs:
           git config --global user.name "AutoPort"
           git config --global user.email "autoport@bot"
           git add .
-          git commit -m "Pure Go Port Fixed" || echo "Nada novo"
+          git commit -m "Pure Go Port NDK r21 Fix" || echo "Nada novo"
           git push
 
       - name: Upload APK
