@@ -349,21 +349,18 @@ jobs:
       - name: Build APK
         working-directory: ./android
         run: |
-          # 1. Gera o script executável (gradlew)
-          gradle wrapper
+          # 1. Esconde os arquivos de configuração para o Gradle 9 não ler e travar
+          mv build.gradle build.gradle.bak
+          mv settings.gradle settings.gradle.bak
           
-          # 2. ESCREVE MANUALMENTE a configuração para garantir o Gradle 8.2
-          # Isso ignora qualquer padrão do sistema e força a versão compatível
-          mkdir -p gradle/wrapper
-          cat << 'EOF' > gradle/wrapper/gradle-wrapper.properties
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.2-bin.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
+          # 2. Gera o Wrapper 8.2 num ambiente "limpo" (sem ler plugins incompatíveis)
+          gradle wrapper --gradle-version 8.2 --no-daemon
           
-          # 3. Executa o build
+          # 3. Restaura os arquivos de configuração corretos
+          mv build.gradle.bak build.gradle
+          mv settings.gradle.bak settings.gradle
+          
+          # 4. Agora usa o ./gradlew (que é o 8.2) para rodar o build real
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
