@@ -325,7 +325,7 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
-      - name: Build Go Library (FIX: Android API 21)
+      - name: Build Go Library (FIX:Android API 21)
         run: |
           go get golang.org/x/mobile/bind
           mkdir -p android/app/src/main/jniLibs
