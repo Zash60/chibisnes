@@ -1,94 +1,173 @@
 package com.kaishuu0123.chibisnes
+
 import android.graphics.*
 import android.media.*
 import android.os.Bundle
 import android.view.*
 import android.widget.Button
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import mobile.Mobile
 import java.nio.ByteBuffer
 
 class EmulatorActivity : AppCompatActivity() {
     private lateinit var surfaceView: SurfaceView
-    private var running = false
+    private var isRunning = false
     private var audioTrack: AudioTrack? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_emulator)
+        
         surfaceView = findViewById(R.id.surface)
-        setupBtns()
+        setupControllerButtons()
 
-        val uri = intent.data ?: return
-        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        if (bytes != null) {
-            val err = Mobile.start(bytes)
-            if (err.isEmpty()) startLoop()
+        val uri = intent.data
+        if (uri == null) {
+            finish()
+            return
+        }
+
+        try {
+            val inputStream = contentResolver.openInputStream(uri)
+            val romBytes = inputStream?.readBytes()
+            inputStream?.close()
+
+            if (romBytes != null && romBytes.isNotEmpty()) {
+                // Inicia o Go. Se retornar string vazia, sucesso.
+                val errorMsg = Mobile.start(romBytes)
+                
+                if (errorMsg.isEmpty()) {
+                    startEmulationLoop()
+                } else {
+                    Toast.makeText(this, "Erro: $errorMsg", Toast.LENGTH_LONG).show()
+                    finish()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            finish()
         }
     }
 
-    private fun setupBtns() {
-        bind(R.id.btnUp, 4); bind(R.id.btnDown, 5); bind(R.id.btnLeft, 6); bind(R.id.btnRight, 7)
-        bind(R.id.btnA, 8); bind(R.id.btnB, 0); bind(R.id.btnX, 9); bind(R.id.btnY, 1)
-        bind(R.id.btnStart, 3); bind(R.id.btnSelect, 2); bind(R.id.btnL, 10); bind(R.id.btnR, 11)
+    private fun setupControllerButtons() {
+        // Mapeamento correto dos botões (IDs baseados no código Go)
+        // B=0, Y=1, Select=2, Start=3, Up=4, Down=5, Left=6, Right=7, A=8, X=9, L=10, R=11
+        
+        bindButton(R.id.btnB, 0)
+        bindButton(R.id.btnY, 1)
+        bindButton(R.id.btnSelect, 2)
+        bindButton(R.id.btnStart, 3)
+        bindButton(R.id.btnUp, 4)
+        bindButton(R.id.btnDown, 5)
+        bindButton(R.id.btnLeft, 6)
+        bindButton(R.id.btnRight, 7)
+        bindButton(R.id.btnA, 8)
+        bindButton(R.id.btnX, 9)
+        bindButton(R.id.btnL, 10)
+        bindButton(R.id.btnR, 11)
     }
-    private fun bind(id: Int, emuId: Int) {
-        findViewById<View>(id).setOnTouchListener { _, e ->
-            // Check rapido para nao mandar input se nao estiver rodando
-            if (running) {
-                when(e.action) {
-                    MotionEvent.ACTION_DOWN -> Mobile.setInput(emuId, true)
-                    MotionEvent.ACTION_UP -> Mobile.setInput(emuId, false)
+
+    private fun bindButton(viewId: Int, emulatorButtonId: Int) {
+        findViewById<View>(viewId).setOnTouchListener { _, event ->
+            // Só envia input se o emulador estiver rodando para evitar crash
+            if (isRunning) {
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> Mobile.setInput(emulatorButtonId, true)
+                    MotionEvent.ACTION_UP -> Mobile.setInput(emulatorButtonId, false)
                 }
             }
             true
         }
     }
 
-    private fun startLoop() {
-        running = true
-        val min = AudioTrack.getMinBufferSize(44100, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+    private fun startEmulationLoop() {
+        isRunning = true
+
+        // Configuração de Áudio
+        val minBufferSize = AudioTrack.getMinBufferSize(
+            44100,
+            AudioFormat.CHANNEL_OUT_STEREO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
         audioTrack = AudioTrack.Builder()
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(44100).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            .setBufferSizeInBytes(min)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_GAME)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(44100)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                    .build()
+            )
+            .setBufferSizeInBytes(minBufferSize)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
+
         audioTrack?.play()
 
+        // Thread de Loop (Game Loop)
         Thread {
-            val bmp = Bitmap.createBitmap(512, 478, Bitmap.Config.ARGB_8888)
-            val rect = Rect()
-            while (running) {
-                val start = System.currentTimeMillis()
-                
-                // Chamadas seguras ao Go
-                val pixels = Mobile.runFrame()
-                val audio = Mobile.getAudioSamples()
+            // Cria um Bitmap fixo de 512x478 (Tamanho do buffer do Go)
+            val bitmap = Bitmap.createBitmap(512, 478, Bitmap.Config.ARGB_8888)
+            val dstRect = Rect()
 
-                if (audio != null) audioTrack?.write(audio, 0, audio.size)
-                
-                // So desenha se pixels nao for nulo
-                if (pixels != null) {
+            while (isRunning) {
+                val loopStart = System.currentTimeMillis()
+
+                // Chama o Go (Processa CPU/PPU)
+                val pixelData = Mobile.runFrame()
+                val audioData = Mobile.getAudioSamples()
+
+                // Toca áudio
+                if (audioData != null) {
+                    audioTrack?.write(audioData, 0, audioData.size)
+                }
+
+                // Desenha na tela
+                if (pixelData != null) {
                     val holder = surfaceView.holder
                     if (holder.surface.isValid) {
-                        val c = holder.lockCanvas()
-                        if (c != null) {
-                            bmp.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
-                            rect.set(0, 0, c.width, c.height)
-                            c.drawColor(Color.BLACK)
-                            c.drawBitmap(bmp, null, rect, null)
-                            holder.unlockCanvasAndPost(c)
+                        val canvas = holder.lockCanvas()
+                        if (canvas != null) {
+                            try {
+                                // Copia bytes brutos para o Bitmap
+                                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixelData))
+
+                                // Limpa e desenha escalado
+                                canvas.drawColor(Color.BLACK)
+                                dstRect.set(0, 0, canvas.width, canvas.height)
+                                canvas.drawBitmap(bitmap, null, dstRect, null)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            } finally {
+                                holder.unlockCanvasAndPost(canvas)
+                            }
                         }
                     }
                 }
-                val diff = System.currentTimeMillis() - start
-                if (diff < 16) Thread.sleep(16 - diff)
+
+                // Controle de FPS simples (~60fps)
+                val elapsed = System.currentTimeMillis() - loopStart
+                val wait = 16 - elapsed
+                if (wait > 0) {
+                    try { Thread.sleep(wait) } catch (e: InterruptedException) {}
+                }
             }
         }.start()
     }
+
     override fun onDestroy() {
         super.onDestroy()
-        running = false
-        audioTrack?.release()
+        isRunning = false
+        try {
+            audioTrack?.stop()
+            audioTrack?.release()
+        } catch (e: Exception) {}
     }
 }
