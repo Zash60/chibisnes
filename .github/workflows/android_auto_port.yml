@@ -349,18 +349,25 @@ jobs:
       - name: Build APK
         working-directory: ./android
         run: |
-          # 1. Esconde os arquivos de configuração para o Gradle 9 não ler e travar
-          mv build.gradle build.gradle.bak
-          mv settings.gradle settings.gradle.bak
+          # 1. Salva os arquivos de configuração reais num local temporário
+          mv build.gradle build.gradle.real
+          mv settings.gradle settings.gradle.real
           
-          # 2. Gera o Wrapper 8.2 num ambiente "limpo" (sem ler plugins incompatíveis)
-          gradle wrapper --gradle-version 8.2 --no-daemon
+          # 2. Cria um settings.gradle FALSO e MÍNIMO.
+          # Isso engana o Gradle 9.2.1 para ele achar que é um projeto válido,
+          # mas sem carregar plugins que causariam erro.
+          echo "rootProject.name = 'temp'" > settings.gradle
           
-          # 3. Restaura os arquivos de configuração corretos
-          mv build.gradle.bak build.gradle
-          mv settings.gradle.bak settings.gradle
+          # 3. Gera o Wrapper 8.2
+          # Como o projeto é "falso", o Gradle 9 não cracha e consegue gerar o script.
+          gradle wrapper --gradle-version 8.2 --distribution-type bin --no-daemon
           
-          # 4. Agora usa o ./gradlew (que é o 8.2) para rodar o build real
+          # 4. Restaura os arquivos de configuração REAIS do projeto
+          mv build.gradle.real build.gradle
+          mv settings.gradle.real settings.gradle
+          
+          # 5. Agora o gradlew existe e aponta para a versão 8.2.
+          # Ele vai baixar o Gradle 8.2 e compilar o projeto real corretamente.
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
