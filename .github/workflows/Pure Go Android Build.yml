@@ -14,7 +14,6 @@ jobs:
     
     # Define variaveis de ambiente globais para o Job
     env:
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/25.2.9519653
       CGO_ENABLED: 1
 
     steps:
