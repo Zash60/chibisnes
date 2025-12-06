@@ -34,9 +34,12 @@ class EmulatorActivity : AppCompatActivity() {
     }
     private fun bind(id: Int, emuId: Int) {
         findViewById<View>(id).setOnTouchListener { _, e ->
-            when(e.action) {
-                MotionEvent.ACTION_DOWN -> Mobile.setInput(emuId, true)
-                MotionEvent.ACTION_UP -> Mobile.setInput(emuId, false)
+            // Check rapido para nao mandar input se nao estiver rodando
+            if (running) {
+                when(e.action) {
+                    MotionEvent.ACTION_DOWN -> Mobile.setInput(emuId, true)
+                    MotionEvent.ACTION_UP -> Mobile.setInput(emuId, false)
+                }
             }
             true
         }
@@ -57,10 +60,14 @@ class EmulatorActivity : AppCompatActivity() {
             val rect = Rect()
             while (running) {
                 val start = System.currentTimeMillis()
+                
+                // Chamadas seguras ao Go
                 val pixels = Mobile.runFrame()
                 val audio = Mobile.getAudioSamples()
 
                 if (audio != null) audioTrack?.write(audio, 0, audio.size)
+                
+                // So desenha se pixels nao for nulo
                 if (pixels != null) {
                     val holder = surfaceView.holder
                     if (holder.surface.isValid) {

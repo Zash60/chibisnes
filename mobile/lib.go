@@ -8,15 +8,27 @@ var console *chibisnes.Console
 
 func Start(romData []byte) string {
   if len(romData) == 0 { return "ROM vazia" }
-  console = chibisnes.NewConsole()
-  if err := console.LoadROM("game.sfc", romData, len(romData)); err != nil {
+  
+  // Reinicia console se ja existir
+  if console != nil {
+     console.Close()
+     console = nil
+  }
+
+  newConsole := chibisnes.NewConsole()
+  if err := newConsole.LoadROM("game.sfc", romData, len(romData)); err != nil {
      return err.Error()
   }
+  
+  // Atribui apenas se carregou com sucesso
+  console = newConsole
   return ""
 }
 
 func RunFrame() []byte {
+  // CORREÇÃO: Evita crash se console for nil
   if console == nil { return nil }
+  
   console.RunFrame()
   
   width, height := 512, 478
@@ -26,7 +38,9 @@ func RunFrame() []byte {
 }
 
 func GetAudioSamples() []byte {
+  // CORREÇÃO: Evita crash se console for nil
   if console == nil { return nil }
+  
   pcm := make([]int16, 735*2)
   console.SetAudioSamples(pcm, 735)
   
@@ -38,7 +52,7 @@ func GetAudioSamples() []byte {
   return out
 }
 
-// CORREÇÃO: int32 para compatibilidade com Kotlin Int
+// CORREÇÃO: int32 para compatibilidade e check de nil
 func SetInput(btnID int32, pressed bool) {
   if console != nil {
     console.SetButtonState(1, int(btnID), pressed)
