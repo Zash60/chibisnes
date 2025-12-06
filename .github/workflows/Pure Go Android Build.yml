@@ -67,7 +67,7 @@ jobs:
             "math"
             "sync"
             "os"
-            "path/filepath"
+            "io" 
 
             "golang.org/x/mobile/app"
             "golang.org/x/mobile/event/lifecycle"
@@ -128,17 +128,18 @@ jobs:
             
             if console != nil { return }
 
-            // Lógica de Carregamento de ROM
+            // 1. Tenta carregar do Armazenamento
             romData, err := loadRomFromStorage()
+            
+            // 2. Se falhar, tenta dos Assets (interno)
             if err != nil {
-                // Fallback: carrega ROM interna (assets) se não achar no storage
-                log.Println("ROM externa não encontrada, tentando interna:", err)
+                log.Println("ROM Storage falhou, tentando assets:", err)
                 romData, err = loadRomFromAssets()
             }
 
             if err != nil || len(romData) == 0 {
                 log.Println("Nenhuma ROM carregada.")
-                // Inicializa vazio para não crashar o OpenGL
+                // Inicializa console vazio para nao crashar o loop grafico
                 console = chibisnes.NewConsole()
                 pixels = make([]byte, snesW*snesH*4)
                 return
@@ -151,19 +152,15 @@ jobs:
           }
 
           func loadRomFromStorage() ([]byte, error) {
-             // Tenta caminhos comuns do Android
-             // O usuario deve colocar o arquivo 'game.sfc' na pasta Download
              paths := []string{
                  "/sdcard/Download/game.sfc",
                  "/storage/emulated/0/Download/game.sfc",
                  "/sdcard/game.sfc",
-                 "/storage/emulated/0/game.sfc",
              }
-
              for _, p := range paths {
+                 // CORREÇÃO: Usando os.ReadFile que é padrão
                  data, err := os.ReadFile(p)
                  if err == nil && len(data) > 0 {
-                     log.Println("ROM carregada de:", p)
                      return data, nil
                  }
              }
@@ -175,16 +172,17 @@ jobs:
              if err != nil { return nil, err }
              defer f.Close()
              
-             info, _ := f.Stat()
-             data := make([]byte, info.Size())
-             f.Read(data)
-             return data, nil
+             // CORREÇÃO: asset.File não tem Stat(). Usar io.ReadAll.
+             return io.ReadAll(f)
           }
 
           func onStart() {
             var err error
             program, err = gl.CreateProgram()
-            if err != nil { return }
+            if err != nil { 
+                log.Println("GL CreateProgram Error:", err)
+                return 
+            }
 
             vs, _ := gl.CreateShader(gl.VERTEX_SHADER)
             gl.ShaderSource(vs, vertexShader)
@@ -260,23 +258,22 @@ jobs:
             w := float32(screenW)
             h := float32(screenH)
 
-            // Controles simples na tela
             if x < w/2 {
                 cy := h / 2
                 cx := w / 4
-                console.SetButtonState(1, 4, pressed && y < cy - 50) // UP
-                console.SetButtonState(1, 5, pressed && y > cy + 50) // DOWN
-                console.SetButtonState(1, 6, pressed && x < cx - 50) // LEFT
-                console.SetButtonState(1, 7, pressed && x > cx + 50) // RIGHT
-                console.SetButtonState(1, 2, pressed && y > h - 150 && x < 150) // SEL
-                console.SetButtonState(1, 3, pressed && y > h - 150 && x > 150 && x < 300) // STA
+                console.SetButtonState(1, 4, pressed && y < cy - 50) 
+                console.SetButtonState(1, 5, pressed && y > cy + 50) 
+                console.SetButtonState(1, 6, pressed && x < cx - 50) 
+                console.SetButtonState(1, 7, pressed && x > cx + 50) 
+                console.SetButtonState(1, 2, pressed && y > h - 150 && x < 150)
+                console.SetButtonState(1, 3, pressed && y > h - 150 && x > 150 && x < 300)
             } else {
                 cy := h / 2
                 cx := w * 0.75
-                console.SetButtonState(1, 8, pressed && x > cx + 50) // A
-                console.SetButtonState(1, 0, pressed && y > cy + 50) // B
-                console.SetButtonState(1, 9, pressed && y < cy - 50) // X
-                console.SetButtonState(1, 1, pressed && x < cx - 50) // Y
+                console.SetButtonState(1, 8, pressed && x > cx + 50)
+                console.SetButtonState(1, 0, pressed && y > cy + 50) 
+                console.SetButtonState(1, 9, pressed && y < cy - 50) 
+                console.SetButtonState(1, 1, pressed && x < cx - 50) 
             }
           }
 
@@ -337,14 +334,15 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
           
+          # Baixa dependencias
           go get golang.org/x/mobile/gl
           go get golang.org/x/mobile/app
           go get golang.org/x/mobile/event/touch
           go get golang.org/x/image/font/gofont/goregular
           go mod tidy
 
-          # Compila usando o AndroidManifest.xml personalizado que criamos
-          gomobile build -target=android -androidapi 21 -o chibisnes.apk ./cmd/mobile
+          # CORREÇÃO: CGO_ENABLED=1 para que o pacote GL seja compilado corretamente
+          CGO_ENABLED=1 gomobile build -target=android -androidapi 21 -o chibisnes.apk ./cmd/mobile
 
       - name: Commit Changes
         run: |
