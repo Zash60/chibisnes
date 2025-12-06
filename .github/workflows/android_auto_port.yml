@@ -340,6 +340,9 @@ jobs:
 
       - name: Build Go Library (Android API 21)
         run: |
+          # CORREÇÃO: Baixa a dependência obrigatória para o bind funcionar
+          go get golang.org/x/mobile/bind
+          
           mkdir -p android/app/src/main/jniLibs
           gomobile bind -target=android -androidapi 21 -o android/app/src/main/jniLibs/chibisnes.aar ./mobile
 
