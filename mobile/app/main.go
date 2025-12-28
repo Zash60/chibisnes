@@ -17,7 +17,6 @@ import (
 )
 
 var (
-	console *mobile.Console
 	program gl.Program
 	buf     gl.Buffer
 )
