@@ -50,3 +50,33 @@ jobs:
 
       - name: Debug - Show Go Environment
         run: go env
+
+      - name: Setup Android Build Environment
+        if: success()
+        run: |
+          # Setup gomobile
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+
+      - name: Build APK
+        if: success()
+        run: |
+          echo "=== Building APK ==="
+          # Build the APK using gomobile
+          CGO_ENABLED=1 gomobile build -target=android -androidapi 21 -o chibisnes.apk ./mobile
+          echo "=== APK Build completed ==="
+
+      - name: Verify APK
+        if: success()
+        run: |
+          echo "=== APK Verification ==="
+          ls -la *.apk
+          file chibisnes.apk
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chibisnes-debug-apk
+          path: chibisnes.apk
+          retention-days: 30
