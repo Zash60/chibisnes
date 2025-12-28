@@ -1,4 +1,4 @@
-name: Pure Go Android Build (Clean & NDK Fix)
+name: Debug Workflow
 
 on:
   workflow_dispatch:
@@ -9,339 +9,44 @@ permissions:
   contents: write
 
 jobs:
-  build-native:
+  debug:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # 1. LIMPEZA TOTAL (Removemos go.mod e pastas antigas)
-      - name: Clean Environment
-        run: |
-          rm -rf android mobile cmd internal build .github/workflows/release.yml go.mod go.sum || true
-          mkdir -p cmd/mobile/assets
-
-      # 2. CONFIGURAR NDK (Manual e Explícito)
-      - name: Install NDK r25c
-        run: |
-          # Instala NDK via sdkmanager
-          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.2.9519653"
-          
-          # Define a variavel para os proximos passos
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
-
-      # 3. RECRIAR go.mod LIMPO
-      - name: Init Clean Go Module
-        run: |
-          # Inicializa o modulo sem dependencias de PC
-          go mod init github.com/kaishuu0123/chibisnes
-
-      # 4. MANIFESTO
-      - name: Create AndroidManifest.xml
-        run: |
-          cat << 'EOF' > cmd/mobile/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.kaishuu0123.chibisnes"
-              android:versionCode="1"
-              android:versionName="1.0">
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-              <application android:label="ChibiSNES" android:debuggable="true" android:requestLegacyExternalStorage="true">
-                  <activity android:name="org.golang.app.GoNativeActivity" android:label="ChibiSNES"
-                      android:configChanges="orientation|keyboardHidden|screenSize" android:exported="true">
-                      <meta-data android:name="android.app.lib_name" android:value="chibisnes" />
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-      # 5. CÓDIGO GO NATIVO (GL ES 2.0)
-      - name: Create cmd/mobile/main.go
-        run: |
-          cat << 'EOF' > cmd/mobile/main.go
-          package main
-
-          import (
-            "encoding/binary"
-            "log"
-            "math"
-            "sync"
-            "os"
-            "io" 
-
-            "golang.org/x/mobile/app"
-            "golang.org/x/mobile/event/lifecycle"
-            "golang.org/x/mobile/event/paint"
-            "golang.org/x/mobile/event/size"
-            "golang.org/x/mobile/event/touch"
-            "golang.org/x/mobile/gl"
-            "golang.org/x/mobile/asset"
-
-            "github.com/kaishuu0123/chibisnes/chibisnes"
-          )
-
-          var (
-            console   *chibisnes.Console
-            program   gl.Program
-            position  gl.Attrib
-            texCoord  gl.Attrib
-            texture   gl.Texture
-            buf       gl.Buffer
-            screenW   int
-            screenH   int
-            mu        sync.Mutex
-            pixels    []byte
-          )
-
-          const (
-            snesW = 512
-            snesH = 478
-          )
-
-          func main() {
-            app.Main(func(a app.App) {
-              for e := range a.Events() {
-                switch e := a.Filter(e).(type) {
-                case lifecycle.Event:
-                  if e.Crosses(lifecycle.StageVisible) == lifecycle.CrossOn {
-                    startEmulator()
-                    onStart()
-                  }
-                  if e.Crosses(lifecycle.StageVisible) == lifecycle.CrossOff {
-                    onStop()
-                  }
-                case size.Event:
-                  screenW = e.WidthPx
-                  screenH = e.HeightPx
-                case paint.Event:
-                  onPaint(a)
-                case touch.Event:
-                  onTouch(e)
-                }
-              }
-            })
-          }
-
-          func startEmulator() {
-            mu.Lock()
-            defer mu.Unlock()
-            
-            if console != nil { return }
-
-            romData, err := loadRomFromStorage()
-            if err != nil {
-                log.Println("Storage fail, trying assets:", err)
-                romData, err = loadRomFromAssets()
-            }
-
-            if err != nil || len(romData) == 0 {
-                console = chibisnes.NewConsole()
-                pixels = make([]byte, snesW*snesH*4)
-                return
-            }
-
-            console = chibisnes.NewConsole()
-            console.LoadROM("game.sfc", romData, len(romData))
-            pixels = make([]byte, snesW*snesH*4)
-          }
-
-          func loadRomFromStorage() ([]byte, error) {
-             paths := []string{
-                 "/sdcard/Download/game.sfc",
-                 "/storage/emulated/0/Download/game.sfc",
-                 "/sdcard/game.sfc",
-             }
-             for _, p := range paths {
-                 data, err := os.ReadFile(p)
-                 if err == nil && len(data) > 0 {
-                     return data, nil
-                 }
-             }
-             return nil, os.ErrNotExist
-          }
-
-          func loadRomFromAssets() ([]byte, error) {
-             f, err := asset.Open("game.sfc")
-             if err != nil { return nil, err }
-             defer f.Close()
-             return io.ReadAll(f)
-          }
-
-          func onStart() {
-            var err error
-            program, err = gl.CreateProgram()
-            if err != nil { return }
-
-            vs, _ := gl.CreateShader(gl.VERTEX_SHADER)
-            gl.ShaderSource(vs, vertexShader)
-            gl.CompileShader(vs)
-            gl.AttachShader(program, vs)
-
-            fs, _ := gl.CreateShader(gl.FRAGMENT_SHADER)
-            gl.ShaderSource(fs, fragmentShader)
-            gl.CompileShader(fs)
-            gl.AttachShader(program, fs)
-
-            gl.LinkProgram(program)
-            gl.UseProgram(program)
-
-            position = gl.GetAttribLocation(program, "position")
-            texCoord = gl.GetAttribLocation(program, "texCoord")
-            gl.Uniform1i(gl.GetUniformLocation(program, "texture"), 0)
-
-            texture = gl.CreateTexture()
-            gl.BindTexture(gl.TEXTURE_2D, texture)
-            gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-            gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-            gl.TexImage2D(gl.TEXTURE_2D, 0, snesW, snesH, gl.RGBA, gl.UNSIGNED_BYTE, nil)
-
-            buf = gl.CreateBuffer()
-            gl.BindBuffer(gl.ARRAY_BUFFER, buf)
-            gl.BufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW)
-          }
-
-          func onStop() {
-            gl.DeleteProgram(program)
-            gl.DeleteBuffer(buf)
-            gl.DeleteTexture(texture)
-          }
-
-          func onPaint(a app.App) {
-            mu.Lock()
-            if console != nil {
-               console.RunFrame()
-               console.SetPixels(pixels)
-               gl.BindTexture(gl.TEXTURE_2D, texture)
-               gl.TexImage2D(gl.TEXTURE_2D, 0, snesW, snesH, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
-            }
-            mu.Unlock()
-
-            gl.ClearColor(0, 0, 0, 1)
-            gl.Clear(gl.COLOR_BUFFER_BIT)
-            gl.UseProgram(program)
-            gl.BindBuffer(gl.ARRAY_BUFFER, buf)
-            gl.EnableVertexAttribArray(position)
-            gl.VertexAttribPointer(position, 2, gl.FLOAT, false, 16, 0)
-            gl.EnableVertexAttribArray(texCoord)
-            gl.VertexAttribPointer(texCoord, 2, gl.FLOAT, false, 16, 8)
-            gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
-            a.Publish()
-            a.Send(paint.Event{}) 
-          }
-
-          func onTouch(t touch.Event) {
-            mu.Lock()
-            defer mu.Unlock()
-            if console == nil { return }
-            pressed := t.Type == touch.TypeBegin || t.Type == touch.TypeMove
-            x, y := float32(t.X), float32(t.Y)
-            w, h := float32(screenW), float32(screenH)
-
-            if x < w/2 {
-                cy, cx := h/2, w/4
-                console.SetButtonState(1, 4, pressed && y < cy - 50) 
-                console.SetButtonState(1, 5, pressed && y > cy + 50) 
-                console.SetButtonState(1, 6, pressed && x < cx - 50) 
-                console.SetButtonState(1, 7, pressed && x > cx + 50) 
-                console.SetButtonState(1, 2, pressed && y > h - 150 && x < 150)
-                console.SetButtonState(1, 3, pressed && y > h - 150 && x > 150 && x < 300)
-            } else {
-                cy, cx := h/2, w*0.75
-                console.SetButtonState(1, 8, pressed && x > cx + 50)
-                console.SetButtonState(1, 0, pressed && y > cy + 50) 
-                console.SetButtonState(1, 9, pressed && y < cy - 50) 
-                console.SetButtonState(1, 1, pressed && x < cx - 50) 
-            }
-          }
-
-          var vertexShader = `
-          #version 100
-          attribute vec2 position;
-          attribute vec2 texCoord;
-          varying vec2 v_texCoord;
-          void main() {
-            gl_Position = vec4(position, 0.0, 1.0);
-            v_texCoord = texCoord;
-          }` + "\x00"
-
-          var fragmentShader = `
-          #version 100
-          precision mediump float;
-          varying vec2 v_texCoord;
-          uniform sampler2D texture;
-          void main() {
-            gl_FragColor = texture2D(texture, v_texCoord);
-          }` + "\x00"
-
-          var vertexData = f32Bytes(
-            -1, -1,  0, 1,
-             1, -1,  1, 1,
-            -1,  1,  0, 0,
-             1,  1,  1, 0,
-          )
-
-          func f32Bytes(values ...float32) []byte {
-            b := make([]byte, 4*len(values))
-            for i, v := range values {
-              binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(v))
-            }
-            return b
-          }
-          EOF
-
-      # 6. DUMMY ROM
-      - name: Create Dummy ROM
-        run: dd if=/dev/zero of=cmd/mobile/assets/game.sfc bs=1024 count=1024
-
-      # 7. SETUP DE BUILD E COMPILAÇÃO
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
-        with: { java-version: '17', distribution: 'temurin' }
 
       - name: Setup Go
         uses: actions/setup-go@v4
         with: { go-version: 'stable' }
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Debug - Check Go Version
+        run: go version
 
-      - name: Build Pure Go APK
+      - name: Debug - Check Go Modules
         run: |
-          # Valida o ambiente
-          echo "NDK: $ANDROID_NDK_HOME"
-          ls -d $ANDROID_NDK_HOME || echo "NDK NAO ENCONTRADO"
-
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          gomobile init
-          
-          # Baixa dependências para o go.mod NOVO
-          go get golang.org/x/mobile/gl
-          go get golang.org/x/mobile/app
-          go get golang.org/x/mobile/event/touch
-          go get golang.org/x/image/font/gofont/goregular
-          go get github.com/edsrzf/mmap-go # Dependencia do emulador
           go mod tidy
+          go list -m all
 
-          # Compila
-          CGO_ENABLED=1 gomobile build -x -target=android -androidapi 21 -o chibisnes.apk ./cmd/mobile
-
-      - name: Commit Changes
+      - name: Debug - Check Project Structure
         run: |
-          git config --global user.name "AutoPort"
-          git config --global user.email "autoport@bot"
-          git add .
-          git commit -m "Pure Go Clean Build" || echo "Nada novo"
-          git push
+          echo "=== Project Structure ==="
+          find . -type f -name "*.go" | head -20
+          echo "=== Go Files Content Check ==="
+          ls -la chibisnes/
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: chibisnes-pure-go
-          path: chibisnes.apk
+      - name: Debug - Test Compilation
+        run: |
+          echo "=== Testing basic compilation ==="
+          go build -v ./chibisnes/...
+          echo "=== Build successful ==="
+
+      - name: Debug - Check Dependencies
+        run: |
+          echo "=== Checking dependencies ==="
+          go list -m golang.org/x/mobile/gl
+          go list -m golang.org/x/mobile/app
+          echo "=== Dependencies check complete ==="
+
+      - name: Debug - Show Go Environment
+        run: go env
