@@ -1,4 +1,4 @@
-name: Debug Workflow
+name: ChibiSNES Android Build
 
 on:
   workflow_dispatch:
@@ -44,8 +44,7 @@ jobs:
       - name: Debug - Check Dependencies
         run: |
           echo "=== Checking dependencies ==="
-          go list -m golang.org/x/mobile/gl
-          go list -m golang.org/x/mobile/app
+          go list -m all | grep mobile || echo "Mobile dependencies not found"
           echo "=== Dependencies check complete ==="
 
       - name: Debug - Show Go Environment
@@ -62,9 +61,14 @@ jobs:
         if: success()
         run: |
           echo "=== Building APK ==="
+          echo "Go version: $(go version)"
+          echo "Go env CGO_ENABLED: $CGO_ENABLED"
+
           # Build the APK using gomobile
           CGO_ENABLED=1 gomobile build -target=android -androidapi 21 -o chibisnes.apk ./mobile
+
           echo "=== APK Build completed ==="
+          ls -la chibisnes.apk
 
       - name: Verify APK
         if: success()
@@ -77,6 +81,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: chibisnes-debug-apk
+          name: chibisnes-apk
           path: chibisnes.apk
           retention-days: 30
