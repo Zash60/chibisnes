@@ -1,3 +1,4 @@
+//go:build android
 // +build android
 
 package main
@@ -16,21 +17,18 @@ import (
 	"github.com/kaishuu0123/chibisnes/mobile"
 )
 
-var (
-	program gl.Program
-	buf     gl.Buffer
-)
+// No global OpenGL variables needed for basic implementation
 
 func main() {
 	app.Main(func(a app.App) {
 		for e := range a.Events() {
-			switch e := app.Filter(e).(type) {
+			switch e := a.Filter(e).(type) {
 			case lifecycle.Event:
 				switch e.Crosses(lifecycle.StageVisible) {
 				case lifecycle.CrossOn:
-					onStart()
+					onStart(a)
 				case lifecycle.CrossOff:
-					onStop()
+					onStop(a)
 				}
 			case size.Event:
 				// Handle resize if needed
@@ -43,7 +41,7 @@ func main() {
 	})
 }
 
-func onStart() {
+func onStart(a app.App) {
 	// Try to load ROM from assets or create empty console
 	if romData := loadRomFromAssets(); romData != nil {
 		if err := mobile.Start(romData); err != "" {
@@ -54,51 +52,29 @@ func onStart() {
 		mobile.Start(nil) // Start with empty console
 	}
 
-	// Initialize OpenGL
-	program = gl.CreateProgram()
-	vertexShader := gl.CreateShader(gl.VERTEX_SHADER)
-	gl.ShaderSource(vertexShader, vertexShaderSource)
-	gl.CompileShader(vertexShader)
-	gl.AttachShader(program, vertexShader)
-
-	fragmentShader := gl.CreateShader(gl.FRAGMENT_SHADER)
-	gl.ShaderSource(fragmentShader, fragmentShaderSource)
-	gl.CompileShader(fragmentShader)
-	gl.AttachShader(program, fragmentShader)
-
-	gl.LinkProgram(program)
-	gl.UseProgram(program)
-
-	buf = gl.CreateBuffer()
-	vertices := []float32{
-		-1, -1, 0, 1,
-		1, -1, 1, 1,
-		-1, 1, 0, 0,
-		1, 1, 1, 0,
-	}
-	gl.BindBuffer(gl.ARRAY_BUFFER, buf)
-	gl.BufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW)
+	// Initialize basic OpenGL setup
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 }
 
-func onStop() {
-	gl.DeleteProgram(program)
-	gl.DeleteBuffer(buf)
+func onStop(a app.App) {
+	// Cleanup if needed
 }
 
 func onPaint(a app.App) {
-	if pixels := mobile.RunFrame(); pixels != nil {
-		// TODO: Render pixels using OpenGL
+	// Run emulator frame
+	pixels := mobile.RunFrame()
+
+	// For now, just clear screen with a color
+	// TODO: Implement proper SNES rendering
+	if pixels != nil {
+		// Use pixels data for rendering
+		gl.ClearColor(0, 0.5, 0, 1) // Green background when emulator is running
+	} else {
+		gl.ClearColor(0.5, 0, 0, 1) // Red background when no ROM loaded
 	}
 
-	gl.ClearColor(0, 0, 0, 1)
 	gl.Clear(gl.COLOR_BUFFER_BIT)
-	gl.UseProgram(program)
-	gl.BindBuffer(gl.ARRAY_BUFFER, buf)
-	gl.EnableVertexAttribArray(0)
-	gl.VertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0)
-	gl.EnableVertexAttribArray(1)
-	gl.VertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8)
-	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
 	a.Publish()
 }
 
@@ -126,20 +102,4 @@ func loadRomFromAssets() []byte {
 	return data[:n]
 }
 
-const vertexShaderSource = `
-attribute vec2 position;
-attribute vec2 texCoord;
-varying vec2 vTexCoord;
-void main() {
-    gl_Position = vec4(position, 0.0, 1.0);
-    vTexCoord = texCoord;
-}
-` + "\x00"
-
-const fragmentShaderSource = `
-precision mediump float;
-varying vec2 vTexCoord;
-void main() {
-    gl_FragColor = vec4(vTexCoord, 0.0, 1.0);
-}
-` + "\x00"
+// TODO: Implement proper SNES rendering with shaders when needed
